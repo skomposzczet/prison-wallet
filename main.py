@@ -1,142 +1,125 @@
-import random
-import ecdsa
-import hashlib
-import base58
-# import math
-# from datetime import datetime
-# import requests
+import math
 import os
+from pprint import pformat
+from typing import Literal
 
-# from dotenv import load_dotenv
+import requests
+from bitcoinutils.keys import P2pkhAddress, P2shAddress, P2wpkhAddress, PrivateKey
+from bitcoinutils.script import Script
+from bitcoinutils.setup import setup
+from bitcoinutils.transactions import Transaction, TxInput, TxOutput
+from dotenv import load_dotenv
 
-# from bitcoinutils.setup import setup
-# from bitcoinutils.keys import PrivateKey, P2pkhAddress
-# from bitcoinutils.transactions import Transaction, TxInput, TxOutput
-# from bitcoinutils.script import Script
+PRIORITY_LVL = {"high": 0, "low": -1}
+API_BASE = "https://blockstream.info/testnet/api"
 
-# load_dotenv()
-#
-# SENDER_WIF = os.getenv("WIF")
-# RECIPIENT_ADDRESS = os.getenv("DT_ADR")
-# AMOUNT_TO_SEND = int(os.getenv("SAT"))
-#
-# setup("testnet")
-#
-# API_BASE = "https://blockstream.info/testnet/api"
-#
-#
-# def get_utxos(address):
-#     return requests.get(f"{API_BASE}/address/{address}/utxo").json()
-#
-#
-# def get_fee_rate():
-#     data = requests.get(f"{API_BASE}/fee-estimates").json()
-#     return float(data.get("6", 2.0))
-#
-#
-# def broadcast_tx(rawtx):
-#     return requests.post(f"{API_BASE}/tx", data=rawtx).text
-#
-#
-# def estimate_tx_size(inputs, outputs):
-#     return 10 + 148 * inputs + 34 * outputs
-#
-#
-# def make_transaction():
-#     if not SENDER_WIF or not RECIPIENT_ADDRESS or not AMOUNT_TO_SEND:
-#         raise ValueError("Brak danych w .env (WIF, DT_ADR, SAT)")
-#
-#     sender_priv = PrivateKey.from_wif(SENDER_WIF)
-#     sender_pub = sender_priv.get_public_key()
-#     sender_addr = sender_pub.get_address().to_string()
-#
-#     print("Sender:", sender_addr)
-#     print("Recipient:", RECIPIENT_ADDRESS)
-#     print("Amount:", AMOUNT_TO_SEND, "sat")
-#
-#     utxos = get_utxos(sender_addr)
-#
-#     if not utxos:
-#         raise RuntimeError("Brak UTXO — doładuj faucet")
-#
-#     utxo = utxos[0]
-#
-#     txid = utxo["txid"]
-#     vout = utxo["vout"]
-#     value = int(utxo["value"])
-#
-#     fee_rate = get_fee_rate()
-#     tx_size = estimate_tx_size(1, 2)
-#     fee = math.ceil(fee_rate * tx_size)
-#
-#     change = value - AMOUNT_TO_SEND - fee
-#
-#     if change < 546:
-#         raise RuntimeError("Change za mały (dust)")
-#
-#     txin = TxInput(txid, vout)
-#
-#     recipient = P2pkhAddress(RECIPIENT_ADDRESS)
-#
-#     txout1 = TxOutput(AMOUNT_TO_SEND, recipient.to_script_pub_key())
-#     txout2 = TxOutput(change, sender_pub.get_address().to_script_pub_key())
-#
-#     tx = Transaction([txin], [txout1, txout2])
-#
-#     script_pubkey = sender_pub.get_address().to_script_pub_key()
-#     signature = sender_priv.sign_input(tx, 0, script_pubkey)
-#
-#     txin.script_sig = Script([signature, sender_pub.to_hex()])
-#
-#     rawtx = tx.serialize()
-#
-#     now = datetime.now()
-#     timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-#
-#     print("\nDatetime:")
-#     print(timestamp)
-#
-#     print("\nRaw TX:")
-#     print(rawtx)
-#
-#     txid = broadcast_tx(rawtx)
-#
-#     print("\nTXID:", txid)
+load_dotenv()
+setup(network="testnet")
 
 
-def save_wallet_stuff(private_key, address, name):
-    path = f"./stuff/{name}"
-    os.makedirs(path, exist_ok=True)
-    with open(f"{path}/private_key", "w") as f:
-        f.write(private_key.hex())
-    with open(f"{path}/address", "w") as f:
-        f.write(address.decode())
+class Wallet:
+    def __init__(self):
+        self.user_wif = os.getenv("KUBA_WIF", None)
+        self.satoshi = 0
+        self.chunks = []
+        self._set_user_keys()
+        self._fetch_wallet_state()
+
+    def _set_user_keys(self):
+        assert isinstance(self.user_wif, str)
+        self.user_priv = PrivateKey.from_wif(self.user_wif)
+        self.user_pub = self.user_priv.get_public_key()
+        self.user_addr = self.user_pub.get_address().to_string()
+
+    def _fetch_wallet_state(self):
+        account = requests.get(f"{API_BASE}/address/{self.user_addr}/utxo").json()
+        account = sorted(account, key=lambda d: d["value"], reverse=True)
+        for chunk in account:
+            if chunk["status"]["confirmed"]:
+                self.chunks.append(chunk)
+                self.satoshi += chunk["value"]
+
+        print(f"Available {self.satoshi} within {len(self.chunks)} chunks")
+
+    @staticmethod
+    def _get_tx_fee_rate(transfer_priority: Literal["high", "low"] = "high") -> float:
+
+        try:
+            fee_rate_estimates = requests.get(f"{API_BASE}/fee-estimates").json()
+        except requests.exceptions.ConnectionError as e:
+            raise Exception("Failed to obtain fee rate estimates") from e
+
+        fee_rate_sorted = sorted(fee_rate_estimates.items(), key=lambda item: item[1])
+        priority_idx = PRIORITY_LVL[transfer_priority]
+        fee_rate: float = round(fee_rate_sorted[priority_idx][1], 4)
+        print(f"Estimated fee rate: {fee_rate}sat/vB for priority {transfer_priority}")
+        return fee_rate
+
+    @staticmethod
+    def _estimate_tx_size(n_inputs: int, n_outputs: int = 2) -> float:
+        """Estimate vB size for transaction fees.
+        Args:
+            n_inputs: chunks with required amount of satoshi.
+            n_outputs: chunk* send to recipient and surplus of satoshi back to our wallet.
+        """
+        return 10 + (148 * n_inputs) + (34 * n_outputs)
+
+    def _get_tx_chunks(self, transfer_amount: int, transfer_priority: Literal["high", "low"]) -> tuple[list, int]:
+        if self.satoshi < transfer_amount:
+            raise Exception("Not enough funds in wallet.")
+
+        fee_rate = self._get_tx_fee_rate(transfer_priority=transfer_priority)
+        tx_chunks = []
+
+        for chunk in self.chunks:
+            tx_chunks.append(chunk)
+            tx_size = self._estimate_tx_size(len(tx_chunks))
+            fee = tx_size * fee_rate
+            if ((avaible_amount := sum([chunk["value"] for chunk in tx_chunks])) + fee) > transfer_amount:
+                change = math.ceil(avaible_amount - transfer_amount - fee)
+                print(f"Estimated fee: {fee} satoshi")
+                return tx_chunks, change
+        raise Exception("Cannot perform transaction with current fee rate.")
+
+    @staticmethod
+    def broadcast_transaction(raw_tx):
+        return requests.post(f"{API_BASE}/tx", data=raw_tx).text
+
+    def transfer_to(self, target_addr: str, transfer_amount: int):
+
+        print(f"Sender Address: {self.user_addr}")
+        print(f"Target Address: {target_addr}")
+        print(f"Transaction: {transfer_amount} satoshi")
+
+        chunks, change = self._get_tx_chunks(transfer_amount=transfer_amount, transfer_priority="high")
+        print(f"Using chunks: \n{pformat(chunks)}")
+        print(f"Return change: {change}")
+
+        tx_inputs = [TxInput(chunk["txid"], chunk["vout"]) for chunk in chunks]
+        tx_outputs = []
+        transfer_out = TxOutput(transfer_amount, P2pkhAddress(target_addr).to_script_pub_key())
+        change_back = TxOutput(change, P2pkhAddress(self.user_addr).to_script_pub_key())
+        tx_outputs.append(transfer_out)
+        tx_outputs.append(change_back)
+        tx = Transaction(tx_inputs, tx_outputs)
+
+        for i in range(len(tx_inputs)):
+            script_pubkey = self.user_pub.get_address().to_script_pub_key()
+            signature = self.user_priv.sign_input(tx, i, script_pubkey)
+            tx_inputs[i].script_sig = Script([signature, self.user_pub.to_hex()])
+
+        raw_tx = tx.serialize()
+        print(f"Raw transaction: \n{raw_tx}")
+        tx_id = self.broadcast_transaction(raw_tx)
+        print(f"Broadcasted transaction: \n{tx_id}")
 
 
-def read_wallet_stuff(name):
-    path = f"./stuff/{name}"
-    with open(f"{path}/private_key", "r") as f:
-        private_key = int(f.read())
-    return private_key
+def main():
+    w = Wallet()
+    target_addr = os.getenv("MATEUSZ_ADDR")
+    assert isinstance(target_addr, str)
+    w.transfer_to(target_addr=target_addr, transfer_amount=2000)
 
 
-def generate_wallet():
-    private_key = os.urandom(32)
-    sk = ecdsa.SigningKey.from_string(private_key, curve=ecdsa.SECP256k1)
-    vk = sk.get_verifying_key()
-    public_key = b"\x04" + vk.to_string()
-    sha256_hash = hashlib.sha256(public_key).digest()
-    ripemd160 = hashlib.new('ripemd160', sha256_hash).digest()
-    network_byte = b'\x6e' + ripemd160
-    checksum = hashlib.sha256(
-        hashlib.sha256(network_byte).digest()).digest()[:4]
-    address = base58.b58encode(network_byte + checksum)
-    return private_key, address
-
-
-if __name__ == '__main__':
-    private_key, address = generate_wallet()
-    print('Private key:', private_key.hex())
-    print('Address:', address.decode())
-    save_wallet_stuff(private_key, address, 'test')
-    # print(read_wallet_stuff('test'))
+if __name__ == "__main__":
+    main()
