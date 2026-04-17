@@ -82,6 +82,7 @@
               plotly
               scipy
               base58
+              customtkinter
             ];
           };
         }
