@@ -1,5 +1,6 @@
 import hashlib
 import math
+import os
 import secrets
 import time
 from pprint import pformat
@@ -78,7 +79,7 @@ class Wallet:
                 self.chunks.append(chunk)
                 self.satoshi += chunk["value"]
 
-        # print(f"Available {self.satoshi} within {len(self.chunks)} chunks")
+        print(f"Available {self.satoshi} within {len(self.chunks)} chunks")
 
     def load_user_keys(self, password: str):
         self.user_wif = load_file(filename="priv_wif.txt", password=password)
@@ -129,9 +130,53 @@ class Wallet:
                 return tx_chunks, change
         raise Exception("Cannot perform transaction with current fee rate.")
 
+    # @staticmethod
+    # def broadcast_transaction(raw_tx):
+    #     return requests.post(f"{API_BASE}/tx", data=raw_tx).text
+
     @staticmethod
-    def broadcast_transaction(raw_tx):
-        return requests.post(f"{API_BASE}/tx", data=raw_tx).text
+    def broadcast_transaction(raw_tx: str):
+        """
+        Broadcasts the hex transaction to the network and provides detailed feedback.
+        """
+        print("--- BROADCASTING TRANSACTION ---")
+        url = f"{API_BASE}/tx"
+
+        try:
+            # Some APIs expect the raw hex string, others expect it in a JSON body.
+            # This assumes a standard text/plain post of the hex string.
+            response = requests.post(url, data=raw_tx)
+
+            # Check if the HTTP request itself succeeded (Status 200)
+            if response.status_code == 200:
+                tx_id = response.text
+                print(f"SUCCESS!")
+                print(f"Transaction ID: {tx_id}")
+                print(f"View here: https://mempool.space/testnet/tx/{tx_id}")
+                return tx_id
+
+            else:
+                # If status is not 200, the API rejected the transaction logic
+                print(f"BROADCAST FAILED (Status {response.status_code})")
+                error_msg = response.text
+
+                # Common Bitcoin Error Interpretation
+                if "non-BIP68-final" in error_msg:
+                    print("Error: The Timelock (CLTV) has not expired yet.")
+                elif "bad-txns-inputs-spent" in error_msg:
+                    print("Error: This UTXO has already been spent (Double Spend).")
+                elif "min relay fee not met" in error_msg:
+                    print("Error: The fee is too low for the network to accept.")
+                elif "mandatory-script-verify-flag-failed" in error_msg:
+                    print("Error: The Secret or the Redeem Script is incorrect.")
+                else:
+                    print(f"API Message: {error_msg}")
+
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"NETWORK ERROR: Could not reach the API. {e}")
+            return None
 
     def transfer_to(self, target_addr: str, transfer_amount: int):
 
@@ -168,11 +213,6 @@ class Wallet:
         print(f"Broadcasted transaction: \n{tx_id}")
 
     def create_htlc(self, secret_text: str, time_to_expiry: int):
-        """
-        Creates a Hashlock + Timelock contract.
-        Success path: Anyone with the secret can spend.
-        Timeout path: Only THIS wallet can spend after expiry.
-        """
         if not self.user_pub:
             raise Exception("Wallet keys not loaded. Load keys first.")
 
@@ -203,7 +243,6 @@ class Wallet:
 
     def _fetch_contract_utxo(self, contract_address: str):
         try:
-            # Query the contract address instead of the user address
             response = requests.get(f"{API_BASE}/address/{contract_address}/utxo")
             utxos = response.json()
 
@@ -217,41 +256,60 @@ class Wallet:
                 return None
 
             target = confirmed_utxos[0]
-            # print(f"Found UTXO: {target['txid']} at vout {target['vout']}")
+            print(f"Found UTXO: {target['txid']} at vout {target['vout']}")
             return target
 
         except Exception as e:
             print(f"Error fetching contract UTXO: {e}")
             return None
 
-    def reclaim_with_secret(self, contract_address, secret_text, redeem_script):
-        contract_utxo = self._fetch_contract_utxo(contract_address=contract_address)
-        tx_input = TxInput(contract_utxo["txid"], contract_utxo["vout"])
-        fee = 700
-        amount_to_receive = contract_utxo["value"] - fee
+    def reclaim_with_secret(self, contract_address: str, secret_text: str, redeem_hex: str):
+        """Builds the transaction to spend the HTLC via the Hashlock path."""
+        utxo = self._fetch_contract_utxo(contract_address)
+        if not utxo:
+            print("Aborting: Cannot reclaim without a confirmed UTXO.")
+            return None
+
+        tx_input = TxInput(utxo["txid"], utxo["vout"])
+
+        fee = 1000
+        amount_to_receive = utxo["value"] - fee
+
+        if amount_to_receive < 546:
+            print(f"Error: Balance too low after fee ({amount_to_receive} sats)")
+            return None
+
         tx_output = TxOutput(amount_to_receive, P2pkhAddress(self.user_addr).to_script_pub_key())
+
         tx = Transaction([tx_input], [tx_output])
+
         secret_hex = secret_text.encode().hex()
-        tx_input.script_sig = Script([secret_hex, "OP_1", redeem_script])
+
+        redeem_script_obj = Script.from_raw(redeem_hex)
+
+        tx_input.script_sig = Script([secret_hex, "OP_1", redeem_script_obj.to_hex()])
         raw_tx = tx.serialize()
-        print(f"Reclaim Transaction Hex: {raw_tx}")
-        return raw_tx
+        print("\n--- RECLAIM TRANSACTION CREATED ---")
+        print(f"Raw Hex: {raw_tx}")
+        print("------------------------------------\n")
+        self.broadcast_transaction(raw_tx)
 
 
 def main():
     w = Wallet()
-    # target_addr = os.getenv("MATEUSZ_ADDR")
+    target_addr = str(os.getenv("KUBA_ADDR"))
     # assert isinstance(target_addr, str)
     # w.generate_new(password="cat")
     w.load_user_keys(password="cat")
     # w._fetch_wallet_state()
     # w.create_htlc(secret_text="bingus666", time_to_expiry=30)
     # w.transfer_to(target_addr="2NEPp42AEJm7WNyyEkoDF7VcAyps5oStkM2", transfer_amount=2000)
-    w.reclaim_with_secret(
-        contract_address="2NEPp42AEJm7WNyyEkoDF7VcAyps5oStkM2",
-        secret_text="bingus666",
-        redeem_script="63a8200e13dcd36bf6694b1976ed3059f6e200cc498b9b1296b75b2921c730da960550886704c3c5d669b1752102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac68",
-    )
+    w.transfer_to(target_addr=target_addr, transfer_amount=3000)
+    # w.reclaim_with_secret(
+    #     contract_address="2NEPp42AEJm7WNyyEkoDF7VcAyps5oStkM2",
+    #     secret_text="bingus666",
+    #     redeem_hex="63a8200e13dcd36bf6694b1976ed3059f6e200cc498b9b1296b75b2921c730da960550886704c3c5d669b1752102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac68",
+    # )
 
 
 if __name__ == "__main__":
