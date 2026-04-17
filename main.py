@@ -212,87 +212,100 @@ class Wallet:
         tx_id = self.broadcast_transaction(raw_tx)
         print(f"Broadcasted transaction: \n{tx_id}")
 
-    def create_htlc(self, secret_text: str, time_to_expiry: int):
-        if not self.user_pub:
-            raise Exception("Wallet keys not loaded. Load keys first.")
+    def create_htlc(self, secret_text: str, lock_time_blocks: int, amount: int):
+        """
+        Locks funds in a P2SH HTLC contract.
+        - secret_text: The string that will be hashed.
+        - lock_time_blocks: Number of blocks to wait before owner can reclaim (e.g. 144).
+        """
+        # 1. Create the secret hash
+        secret_hash = hashlib.sha256(secret_text.encode()).digest()
 
-        secret_bytes = secret_text.encode()
-        hash_lock = hashlib.sha256(secret_bytes).digest()
-        expiry_time = int(time.time()) + (time_to_expiry * 60)
-        redeem_script = Script([
+        # 2. Define the Script:
+        # IF <secret> presented, allow spend. ELSE <locktime> passed, allow owner spend.
+        # This is a simplified version for demonstration:
+        htlc_script = Script([
             "OP_IF",
             "OP_SHA256",
-            hash_lock.hex(),
+            secret_hash.hex(),
             "OP_EQUALVERIFY",
+            self.user_pub.to_hex(),
+            "OP_CHECKSIG",
             "OP_ELSE",
-            expiry_time,
-            "OP_CHECKLOCKTIMEVERIFY",
+            lock_time_blocks,
+            "OP_CHECKSEQUENCEVERIFY",
             "OP_DROP",
             self.user_pub.to_hex(),
             "OP_CHECKSIG",
             "OP_ENDIF",
         ])
-        contract_addr = P2shAddress.from_script(redeem_script)
-        print("\n--- NEW HTLC CONTRACT ---")
-        print(f"Contract Address: {contract_addr.to_string()}")
-        print(f"Secret (Keep safe): {secret_text}")
-        print(f"Expiry Timestamp:  {expiry_time}")
-        print(f"Redeem Script Hex: {redeem_script.to_hex()}")
 
-        return {"address": contract_addr.to_string(), "redeem_script": redeem_script, "expiry": expiry_time}
+        # 3. Get P2SH Address
+        p2sh_addr = P2shAddress.from_script(htlc_script)
+        contract_addr = p2sh_addr.to_string()
 
-    def _fetch_contract_utxo(self, contract_address: str):
-        try:
-            response = requests.get(f"{API_BASE}/address/{contract_address}/utxo")
-            utxos = response.json()
+        print(f"Contract Address: {contract_addr}")
+        print(f"Redeem Script (Save this!): {htlc_script.to_hex()}")
 
-            if not utxos:
-                print(f"No funds found at {contract_address} yet.")
-                return None
+        self.transfer_to(target_addr=contract_addr, transfer_amount=amount)
+        return contract_addr, htlc_script.to_hex()
 
-            confirmed_utxos = [u for u in utxos if u["status"]["confirmed"]]
-            if not confirmed_utxos:
-                print("Funds found, but they are still unconfirmed (mempool).")
-                return None
+    def retrieve_from_htlc(self, contract_addr: str, redeem_script_hex: str, secret_text: str):
+        """
+        Retrieves funds from the HTLC using the secret.
+        """
+        redeem_script = Script.from_raw(redeem_script_hex)
 
-            target = confirmed_utxos[0]
-            print(f"Found UTXO: {target['txid']} at vout {target['vout']}")
-            return target
+        # 2. Fetch the UTXOs for the contract address
+        url = f"{API_BASE}/address/{contract_addr}/utxo"
+        response = requests.get(url)
+        utxos = response.json()
 
-        except Exception as e:
-            print(f"Error fetching contract UTXO: {e}")
+        if not utxos:
+            print("Error: No UTXOs found for this contract address. Is it funded?")
             return None
 
-    def reclaim_with_secret(self, contract_address: str, secret_text: str, redeem_hex: str):
-        """Builds the transaction to spend the HTLC via the Hashlock path."""
-        utxo = self._fetch_contract_utxo(contract_address)
-        if not utxo:
-            print("Aborting: Cannot reclaim without a confirmed UTXO.")
-            return None
+        # Take the first available chunk (UTXO)
+        chunk = utxos[0]
+        tx_in = TxInput(chunk["txid"], chunk["vout"])
 
-        tx_input = TxInput(utxo["txid"], utxo["vout"])
-
+        # 3. Define where the money goes (back to your wallet)
+        # We'll subtract a fixed fee for simplicity, or use your _get_tx_fee_rate logic
         fee = 1000
-        amount_to_receive = utxo["value"] - fee
+        amount_to_receive = chunk["value"] - fee
+        tx_out = TxOutput(amount_to_receive, P2pkhAddress(self.user_addr).to_script_pub_key())
 
-        if amount_to_receive < 546:
-            print(f"Error: Balance too low after fee ({amount_to_receive} sats)")
+        # 4. Create the Transaction object
+        tx = Transaction([tx_in], [tx_out])
+
+        # 5. Sign the input using the redeem script
+        # This creates a signature that satisfies the OP_CHECKSIG inside the contract
+        sig = self.user_priv.sign_input(tx, 0, redeem_script)
+
+        # 6. Build the ScriptSig (The "Key" to the "Lock")
+        # Stack order for our HTLC: [Signature, Secret, OP_1, RedeemScript]
+        # We use the integer 1 to trigger OP_1 (minimal data rule)
+        # We ensure the secret is passed as raw bytes
+        secret_bytes = secret_text.encode("utf-8")
+
+        tx_in.script_sig = Script([
+            sig,
+            secret_bytes.hex(),  # bitcoinutils expects hex strings for data chunks
+            1,  # Integer 1 = OP_1 (triggers the IF branch)
+            redeem_script_hex,  # The full script must be provided at the end
+        ])
+
+        # 7. Serialize and Broadcast
+        try:
+            raw_tx = tx.serialize()
+            print(f"Raw Transaction: {raw_tx}")
+            return self.broadcast_transaction(raw_tx)
+        except Exception as e:
+            print(f"Serialization Error: {e}")
+            # If you still get an even/odd error, let's look at the tokens:
+            for i, token in enumerate(tx_in.script_sig.script):
+                print(f"Token {i} ({type(token)}): {token}")
             return None
-
-        tx_output = TxOutput(amount_to_receive, P2pkhAddress(self.user_addr).to_script_pub_key())
-
-        tx = Transaction([tx_input], [tx_output])
-
-        secret_hex = secret_text.encode().hex()
-
-        redeem_script_obj = Script.from_raw(redeem_hex)
-
-        tx_input.script_sig = Script([secret_hex, "OP_1", redeem_script_obj.to_hex()])
-        raw_tx = tx.serialize()
-        print("\n--- RECLAIM TRANSACTION CREATED ---")
-        print(f"Raw Hex: {raw_tx}")
-        print("------------------------------------\n")
-        self.broadcast_transaction(raw_tx)
 
 
 def main():
@@ -301,10 +314,16 @@ def main():
     # assert isinstance(target_addr, str)
     # w.generate_new(password="cat")
     w.load_user_keys(password="cat")
+    # w.create_htlc(secret_text="bingus", lock_time_blocks=1, amount=27000)
+    # w.retrieve_from_htlc(
+    #     contract_addr="2MxX3K46B9VXfRP5kuR7Uy8Ay7Uwmcdqvmp",
+    #     redeem_script_hex="63a82059a3cbc4ff8edc40c9eccfbfbb98cd45a7bccc581c132868d106069828933753882102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac6751b2752102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac68",
+    #     secret_text="bingus",
+    # )
     # w._fetch_wallet_state()
     # w.create_htlc(secret_text="bingus666", time_to_expiry=30)
     # w.transfer_to(target_addr="2NEPp42AEJm7WNyyEkoDF7VcAyps5oStkM2", transfer_amount=2000)
-    w.transfer_to(target_addr=target_addr, transfer_amount=3000)
+    # w.transfer_to(target_addr=target_addr, transfer_amount=3000)
     # w.reclaim_with_secret(
     #     contract_address="2NEPp42AEJm7WNyyEkoDF7VcAyps5oStkM2",
     #     secret_text="bingus666",
