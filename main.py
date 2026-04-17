@@ -45,7 +45,9 @@ class Wallet:
         self.chunks = []
 
     @staticmethod
-    def generate_new(password: str):
+    def generate_new(password: str, output_dir: str):
+        os.makedirs(output_dir, exist_ok=True)
+
         private_key = secrets.token_bytes(32)
         sk = ecdsa.SigningKey.from_string(private_key, curve=ecdsa.SECP256k1)
         vk = sk.get_verifying_key()
@@ -59,11 +61,30 @@ class Wallet:
         wallet_private_key = private_key.hex()
         wallet_wif = hex_to_wif(wallet_private_key)
         wallet_address = address.decode("utf-8")
-        save_file(filename="priv_wif.txt", message=wallet_wif, password=password)
-        save_file(filename="pub_addr.txt", message=wallet_address, password=password)
+
+        save_file(filename=os.path.join(output_dir, "priv_wif.txt"), message=wallet_wif, password=password)
+        save_file(filename=os.path.join(output_dir, "pub_addr.txt"), message=wallet_address, password=password)
+
         print("Generated:")
         print(f"wif: {wallet_wif}")
         print(f"addr: {wallet_address}")
+        return wallet_wif, wallet_address
+
+    @staticmethod
+    def import_from_wif(password: str, wif: str, output_dir: str):
+        os.makedirs(output_dir, exist_ok=True)
+
+        wallet_priv = PrivateKey.from_wif(wif)
+        wallet_pub = wallet_priv.get_public_key()
+        wallet_address = wallet_pub.get_address().to_string()
+
+        save_file(filename=os.path.join(output_dir, "priv_wif.txt"), message=wif, password=password)
+        save_file(filename=os.path.join(output_dir, "pub_addr.txt"), message=wallet_address, password=password)
+
+        print("Imported wallet:")
+        print(f"wif: {wif}")
+        print(f"addr: {wallet_address}")
+        return wif, wallet_address
 
     def _set_user_wif(self):
         assert isinstance(self.user_wif, str)
@@ -81,13 +102,19 @@ class Wallet:
 
         print(f"Available {self.satoshi} within {len(self.chunks)} chunks")
 
-    def load_user_keys(self, password: str):
-        self.user_wif = load_file(filename="priv_wif.txt", password=password)
-        self.user_addr = load_file(filename="pub_addr.txt", password=password)
+    def load_user_keys(self, password: str, wallet_dir: str):
+        self.user_wif = load_file(filename=os.path.join(wallet_dir, "priv_wif.txt"), password=password)
+        self.user_addr = load_file(filename=os.path.join(wallet_dir, "pub_addr.txt"), password=password)
+
+        if not self.user_wif or not self.user_addr or self.user_wif.startswith("Wrong password") or self.user_addr.startswith("Wrong password"):
+            raise Exception("Incorrect password or corrupted wallet file.")
+
         print("Loaded:")
         print(f"wif: {self.user_wif}")
         print(f"addr: {self.user_addr}")
         self._set_user_wif()
+        self.chunks = []
+        self.satoshi = 0
         self._fetch_wallet_state()
 
     @staticmethod
@@ -113,7 +140,11 @@ class Wallet:
         """
         return 10 + (148 * n_inputs) + (34 * n_outputs)
 
-    def _get_tx_chunks(self, transfer_amount: int, transfer_priority: Literal["high", "low"]) -> tuple[list, int]:
+    def estimate_fee(self, transfer_amount: int, transfer_priority: Literal["high", "low"] = "high") -> int:
+        _, _, fee = self._get_tx_chunks(transfer_amount=transfer_amount, transfer_priority=transfer_priority)
+        return fee
+
+    def _get_tx_chunks(self, transfer_amount: int, transfer_priority: Literal["high", "low"]) -> tuple[list, int, int]:
         if self.satoshi < transfer_amount:
             raise Exception("Not enough funds in wallet.")
 
@@ -123,11 +154,11 @@ class Wallet:
         for chunk in self.chunks:
             tx_chunks.append(chunk)
             tx_size = self._estimate_tx_size(len(tx_chunks))
-            fee = tx_size * fee_rate
+            fee = math.ceil(tx_size * fee_rate)
             if ((avaible_amount := sum([chunk["value"] for chunk in tx_chunks])) + fee) > transfer_amount:
                 change = math.ceil(avaible_amount - transfer_amount - fee)
                 print(f"Estimated fee: {fee} satoshi")
-                return tx_chunks, change
+                return tx_chunks, change, fee
         raise Exception("Cannot perform transaction with current fee rate.")
 
 
@@ -176,9 +207,10 @@ class Wallet:
         print(f"Target Address: {target_addr}")
         print(f"Transaction: {transfer_amount} satoshi")
 
-        chunks, change = self._get_tx_chunks(transfer_amount=transfer_amount, transfer_priority="high")
+        chunks, change, fee = self._get_tx_chunks(transfer_amount=transfer_amount, transfer_priority="high")
         print(f"Using chunks: \n{pformat(chunks)}")
         print(f"Return change: {change}")
+        print(f"Estimated fee: {fee} satoshi")
 
         tx_inputs = [TxInput(chunk["txid"], chunk["vout"]) for chunk in chunks]
         tx_outputs = []
@@ -203,12 +235,13 @@ class Wallet:
         print(f"Raw transaction: \n{raw_tx}")
         tx_id = self.broadcast_transaction(raw_tx)
         print(f"Broadcasted transaction: \n{tx_id}")
+        return tx_id, fee
 
     def create_htlc(self, secret_text: str, lock_time_blocks: int, amount: int):
         """
         Locks funds in a P2SH HTLC contract.
         - secret_text: The string that will be hashed.
-        - lock_time_blocks: Number of blocks to wait before owner can reclaim 1~10min.
+        - lock_time_blocks: Number of blocks to wait before owner can reclaim funds (1=~10min).
         """
         secret_hash = hashlib.sha256(secret_text.encode()).digest()
 
@@ -277,16 +310,16 @@ class Wallet:
 
 def main():
     w = Wallet()
-    target_addr = str(os.getenv("KUBA_ADDR"))
+    # target_addr = str(os.getenv("KUBA_ADDR"))
     # assert isinstance(target_addr, str)
     # w.generate_new(password="cat")
-    w.load_user_keys(password="cat")
+    # w.load_user_keys(password="12345")
     # w.create_htlc(secret_text="bingus", lock_time_blocks=1, amount=27000)
-    # w.retrieve_from_htlc(
-    #     contract_addr="2MxX3K46B9VXfRP5kuR7Uy8Ay7Uwmcdqvmp",
-    #     redeem_script_hex="63a82059a3cbc4ff8edc40c9eccfbfbb98cd45a7bccc581c132868d106069828933753882102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac6751b2752102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac68",
-    #     secret_text="bingus",
-    # )
+    w.retrieve_from_htlc(
+        contract_addr="2MxX3K46B9VXfRP5kuR7Uy8Ay7Uwmcdqvmp",
+        redeem_script_hex="63a82059a3cbc4ff8edc40c9eccfbfbb98cd45a7bccc581c132868d106069828933753882102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac6751b2752102d77b6a6e96be82b4d8cde6caa8257717a322693bd543278a9735e375d95b581fac68",
+        secret_text="bingus",
+    )
 
 
 if __name__ == "__main__":
