@@ -318,6 +318,9 @@ class SmartContractPage(ctk.CTkFrame):
         self.secret_text = ctk.CTkEntry(self.content, placeholder_text="Secret text", width=500)
         self.secret_text.pack(pady=10)
 
+        self.recipient_address = ctk.CTkEntry(self.content, placeholder_text="Recipient wallet address", width=500)
+        self.recipient_address.pack(pady=10)
+
         self.lock_time = ctk.CTkEntry(self.content, placeholder_text="Lock time (minutes)", width=500)
         self.lock_time.pack(pady=10)
 
@@ -356,6 +359,11 @@ class SmartContractPage(ctk.CTkFrame):
             messagebox.showerror("Error", "Lock time and amount must be integers")
             return
 
+        recipient = self.recipient_address.get().strip()
+        if not recipient:
+            messagebox.showerror("Error", "Please enter the recipient wallet address")
+            return
+
         if lock_minutes <= 0 or amount <= 0:
             messagebox.showerror("Error", "Lock time and amount must be positive")
             return
@@ -372,6 +380,7 @@ class SmartContractPage(ctk.CTkFrame):
                 secret_text=secret,
                 lock_time_blocks=lock_blocks,
                 amount=amount,
+                recipient_addr=recipient,
             )
         except Exception as e:
             messagebox.showerror("Error", f"Failed to create smart contract: {e}")

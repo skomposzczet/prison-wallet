@@ -161,6 +161,14 @@ class Wallet:
                 return tx_chunks, change, fee
         raise Exception("Cannot perform transaction with current fee rate.")
 
+    @staticmethod
+    def _address_to_hash160(address: str) -> bytes:
+        decoded = base58.b58decode(address)
+        if len(decoded) != 25:
+            raise ValueError("Invalid address format")
+        if decoded[0] not in (0x00, 0x6f):
+            raise ValueError("Recipient address must be a P2PKH address")
+        return decoded[1:-4]
 
     @staticmethod
     def broadcast_transaction(raw_tx: str):
@@ -237,20 +245,25 @@ class Wallet:
         print(f"Broadcasted transaction: \n{tx_id}")
         return tx_id, fee
 
-    def create_htlc(self, secret_text: str, lock_time_blocks: int, amount: int):
+    def create_htlc(self, secret_text: str, lock_time_blocks: int, amount: int, recipient_addr: str):
         """
         Locks funds in a P2SH HTLC contract.
         - secret_text: The string that will be hashed.
         - lock_time_blocks: Number of blocks to wait before owner can reclaim funds (1=~10min).
+        - recipient_addr: Address of the wallet that can retrieve funds using the secret.
         """
         secret_hash = hashlib.sha256(secret_text.encode()).digest()
+        recipient_hash = self._address_to_hash160(recipient_addr)
 
         htlc_script = Script([
             "OP_IF",
             "OP_SHA256",
             secret_hash.hex(),
             "OP_EQUALVERIFY",
-            self.user_pub.to_hex(),
+            "OP_DUP",
+            "OP_HASH160",
+            recipient_hash.hex(),
+            "OP_EQUALVERIFY",
             "OP_CHECKSIG",
             "OP_ELSE",
             lock_time_blocks,
@@ -292,6 +305,7 @@ class Wallet:
         secret_bytes = secret_text.encode("utf-8")
         tx_in.script_sig = Script([
             sig,
+            self.user_pub.to_hex(),
             secret_bytes.hex(),
             1,
             redeem_script_hex,
