@@ -83,6 +83,9 @@
               scipy
               base58
               customtkinter
+              requests
+              python-dotenv
+              cryptography
             ];
           };
         }
