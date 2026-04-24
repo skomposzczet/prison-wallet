@@ -341,6 +341,19 @@ class SmartContractPage(ctk.CTkFrame):
         self.redeem_secret.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Retrieve Contract", command=self.retrieve_contract, width=240).pack(pady=10)
+
+        ctk.CTkLabel(self.content, text="Reclaim Contract (Owner)", font=(None, 24)).pack(pady=20)
+
+        self.reclaim_contract_address = ctk.CTkEntry(self.content, placeholder_text="Contract address", width=500)
+        self.reclaim_contract_address.pack(pady=10)
+
+        self.reclaim_redeem_script = ctk.CTkEntry(self.content, placeholder_text="Redeem script hex", width=500)
+        self.reclaim_redeem_script.pack(pady=10)
+
+        self.reclaim_lock_blocks = ctk.CTkEntry(self.content, placeholder_text="Lock time (blocks, same as when created)", width=500)
+        self.reclaim_lock_blocks.pack(pady=10)
+
+        ctk.CTkButton(self.content, text="Reclaim Contract", command=self.reclaim_contract, width=240).pack(pady=10)
         ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=240).pack(pady=5)
 
     def create_contract(self):
@@ -422,6 +435,54 @@ class SmartContractPage(ctk.CTkFrame):
         else:
             messagebox.showerror("Error", "Retrieval broadcast failed")
 
+    def reclaim_contract(self):
+        contract_addr = self.reclaim_contract_address.get().strip()
+        redeem_script_hex = self.reclaim_redeem_script.get().strip()
+        lock_blocks_text = self.reclaim_lock_blocks.get().strip()
+
+        if not contract_addr or not redeem_script_hex or not lock_blocks_text:
+            messagebox.showerror("Error", "Please complete all reclaim fields")
+            return
+
+        try:
+            lock_blocks = int(lock_blocks_text)
+        except ValueError:
+            messagebox.showerror("Error", "Lock time must be an integer (number of blocks)")
+            return
+
+        if lock_blocks <= 0:
+            messagebox.showerror("Error", "Lock time must be a positive integer")
+            return
+
+        wallet = self.controller.current_wallet_obj
+        if wallet is None:
+            messagebox.showerror("Error", "Wallet is not loaded")
+            return
+
+        proceed = messagebox.askyesno(
+            "Confirm Reclaim",
+            f"Reclaim funds from contract:\n{contract_addr}\n\nMake sure the timelock ({lock_blocks} blocks) has already expired.\nContinue?"
+        )
+        if not proceed:
+            return
+
+        try:
+            tx_id = wallet.reclaim_from_htlc(
+                contract_addr=contract_addr,
+                redeem_script_hex=redeem_script_hex,
+                lock_time_blocks=lock_blocks,
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Reclaim failed: {e}")
+            print(e)
+            return
+
+        if tx_id:
+            messagebox.showinfo("Reclaimed", f"Reclaim transaction broadcasted\nTXID: {tx_id}")
+            self.controller.show_frame("WalletPage")
+        else:
+            messagebox.showerror("Error", "Reclaim broadcast failed")
+
 
 class NewTxPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -499,4 +560,3 @@ class NewTxPage(ctk.CTkFrame):
 if __name__ == "__main__":
     app = App()
     app.mainloop()
-
