@@ -29,7 +29,7 @@ class App(ctk.CTk):
 
         self.frames = {}
 
-        for F in (LoginPage, RegisterPage, ProfilePage, NewWalletPage, WalletPage, SmartContractPage, NewTxPage):
+        for F in (LoginPage, RegisterPage, ProfilePage, NewWalletPage, WalletPage, SmartContractPage, NewTxPage, TxHistoryPage):
             frame = F(self.container, self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -266,6 +266,7 @@ class WalletPage(ctk.CTkFrame):
 
         ctk.CTkButton(self.content, text="Create Transaction", command=lambda: controller.show_frame("NewTxPage"), width=240, font=(None, 24)).pack(pady=5)
         ctk.CTkButton(self.content, text="Create Smart Contract", command=lambda: controller.show_frame("SmartContractPage"), width=240, font=(None, 24)).pack(pady=5)
+        ctk.CTkButton(self.content, text="Transaction History", command=lambda: controller.show_frame("TxHistoryPage"), width=240, font=(None, 24)).pack(pady=5)
         ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
 
         self.bind("<Visibility>", lambda e: self.load_wallet())
@@ -496,7 +497,130 @@ class NewTxPage(ctk.CTkFrame):
         self.controller.show_frame("WalletPage")
 
 
+class TxHistoryPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        header = ctk.CTkFrame(self)
+        header.pack(fill="x", padx=20, pady=(20, 0))
+
+        ctk.CTkLabel(header, text="Transaction History", font=(None, 30)).pack(side="left", padx=10)
+        ctk.CTkButton(header, text="Refresh", command=self.load_history, width=120).pack(side="right", padx=10)
+        ctk.CTkButton(header, text="Back", command=lambda: controller.show_frame("WalletPage"), width=100).pack(side="right", padx=5)
+
+        self.status_label = ctk.CTkLabel(self, text="", font=(None, 14))
+        self.status_label.pack(pady=(5, 0))
+
+        self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
+        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self.bind("<Visibility>", lambda e: self.load_history())
+
+    def load_history(self):
+        wallet = self.controller.current_wallet_obj
+        if wallet is None or not wallet.user_addr:
+            self.status_label.configure(text="No wallet loaded.")
+            return
+
+        self.status_label.configure(text="Loading...")
+        self.update_idletasks()
+
+        for w in self.scroll_frame.winfo_children():
+            w.destroy()
+
+        address = wallet.user_addr
+        import requests
+        API_BASE = "https://blockstream.info/testnet/api"
+
+        try:
+            txs = requests.get(f"{API_BASE}/address/{address}/txs", timeout=10).json()
+        except Exception as e:
+            self.status_label.configure(text=f"Error fetching transactions: {e}")
+            return
+
+        if not txs:
+            self.status_label.configure(text="No transactions found for this address.")
+            return
+
+        self.status_label.configure(text=f"{len(txs)} transaction(s) found")
+
+        for tx in txs:
+            txid = tx.get("txid", "?")
+            confirmed = tx.get("status", {}).get("confirmed", False)
+
+            received = sum(
+                vout["value"]
+                for vout in tx.get("vout", [])
+                if vout.get("scriptpubkey_address") == address
+            )
+            spent = sum(
+                vin["prevout"]["value"]
+                for vin in tx.get("vin", [])
+                if vin.get("prevout", {}).get("scriptpubkey_address") == address
+            )
+
+            net = received - spent
+
+            if net >= 0:
+                tx_type = "INCOMING"
+                amount = net
+                type_color = "#2ecc71"
+                arrow = "+"
+            else:
+                tx_type = "OUTGOING"
+                amount = abs(net)
+                type_color = "#e74c3c"
+                arrow = "-"
+
+            fee = tx.get("fee", None)
+            fee_str = f"{fee} sat" if (fee is not None and spent > 0) else "—"
+
+            card = ctk.CTkFrame(self.scroll_frame, corner_radius=8)
+            card.pack(fill="x", pady=4, padx=4)
+
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=12, pady=(10, 4))
+
+            ctk.CTkLabel(
+                top,
+                text=f"{arrow} {tx_type}",
+                font=(None, 16, "bold"),
+                text_color=type_color,
+                width=140,
+                anchor="w",
+            ).pack(side="left")
+
+            ctk.CTkLabel(
+                top,
+                text=f"{amount:,} sat",
+                font=(None, 16, "bold"),
+                anchor="e",
+            ).pack(side="right")
+
+            bottom = ctk.CTkFrame(card, fg_color="transparent")
+            bottom.pack(fill="x", padx=12, pady=(0, 10))
+
+            short_txid = f"{txid[:16]}...{txid[-8:]}"
+            ctk.CTkLabel(
+                bottom,
+                text=f"TXID: {short_txid}",
+                font=(None, 11),
+                text_color="gray",
+                anchor="w",
+            ).pack(side="left")
+
+            status_text = "Confirmed" if confirmed else "Unconfirmed"
+            status_color = "#2ecc71" if confirmed else "#f39c12"
+            ctk.CTkLabel(
+                bottom,
+                text=f"Fee: {fee_str}   |   {status_text}",
+                font=(None, 11),
+                text_color=status_color,
+                anchor="e",
+            ).pack(side="right")
+
+
 if __name__ == "__main__":
     app = App()
     app.mainloop()
-
