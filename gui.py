@@ -502,6 +502,7 @@ class TxHistoryPage(ctk.CTkFrame):
         super().__init__(parent)
         self.controller = controller
 
+        # Header
         header = ctk.CTkFrame(self)
         header.pack(fill="x", padx=20, pady=(20, 0))
 
@@ -512,6 +513,7 @@ class TxHistoryPage(ctk.CTkFrame):
         self.status_label = ctk.CTkLabel(self, text="", font=(None, 14))
         self.status_label.pack(pady=(5, 0))
 
+        # Scrollable list
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
         self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
@@ -529,12 +531,8 @@ class TxHistoryPage(ctk.CTkFrame):
         for w in self.scroll_frame.winfo_children():
             w.destroy()
 
-        address = wallet.user_addr
-        import requests
-        API_BASE = "https://blockstream.info/testnet/api"
-
         try:
-            txs = requests.get(f"{API_BASE}/address/{address}/txs", timeout=10).json()
+            txs = wallet.fetch_tx_history()
         except Exception as e:
             self.status_label.configure(text=f"Error fetching transactions: {e}")
             return
@@ -546,35 +544,20 @@ class TxHistoryPage(ctk.CTkFrame):
         self.status_label.configure(text=f"{len(txs)} transaction(s) found")
 
         for tx in txs:
-            txid = tx.get("txid", "?")
-            confirmed = tx.get("status", {}).get("confirmed", False)
+            txid = tx["txid"]
+            confirmed = tx["confirmed"]
+            tx_type = tx["type"]
+            amount = tx["amount"]
+            fee = tx["fee"]
 
-            received = sum(
-                vout["value"]
-                for vout in tx.get("vout", [])
-                if vout.get("scriptpubkey_address") == address
-            )
-            spent = sum(
-                vin["prevout"]["value"]
-                for vin in tx.get("vin", [])
-                if vin.get("prevout", {}).get("scriptpubkey_address") == address
-            )
-
-            net = received - spent
-
-            if net >= 0:
-                tx_type = "INCOMING"
-                amount = net
+            if tx_type == "incoming":
+                type_label = "+ INCOMING"
                 type_color = "#2ecc71"
-                arrow = "+"
             else:
-                tx_type = "OUTGOING"
-                amount = abs(net)
+                type_label = "- OUTGOING"
                 type_color = "#e74c3c"
-                arrow = "-"
 
-            fee = tx.get("fee", None)
-            fee_str = f"{fee} sat" if (fee is not None and spent > 0) else "—"
+            fee_str = f"{fee} sat" if fee is not None else "—"
 
             card = ctk.CTkFrame(self.scroll_frame, corner_radius=8)
             card.pack(fill="x", pady=4, padx=4)
@@ -584,7 +567,7 @@ class TxHistoryPage(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 top,
-                text=f"{arrow} {tx_type}",
+                text=type_label,
                 font=(None, 16, "bold"),
                 text_color=type_color,
                 width=140,

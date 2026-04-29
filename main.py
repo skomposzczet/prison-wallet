@@ -283,6 +283,47 @@ class Wallet:
         self.transfer_to(target_addr=contract_addr, transfer_amount=amount)
         return contract_addr, htlc_script.to_hex()
 
+    def fetch_tx_history(self) -> list[dict]:
+        """
+        Fetches transaction history for the loaded wallet address.
+        Returns a list of dicts with keys:
+            txid, type ("incoming"/"outgoing"), amount (satoshi), fee (satoshi|None), confirmed (bool)
+        """
+        response = requests.get(f"{API_BASE}/address/{self.user_addr}/txs")
+        txs = response.json()
+
+        result = []
+        for tx in txs:
+            txid = tx.get("txid", "?")
+            confirmed = tx.get("status", {}).get("confirmed", False)
+            fee = tx.get("fee", None)
+
+            received = sum(
+                vout["value"]
+                for vout in tx.get("vout", [])
+                if vout.get("scriptpubkey_address") == self.user_addr
+            )
+            spent = sum(
+                vin["prevout"]["value"]
+                for vin in tx.get("vin", [])
+                if vin.get("prevout", {}).get("scriptpubkey_address") == self.user_addr
+            )
+
+            net = received - spent
+            tx_type = "incoming" if net >= 0 else "outgoing"
+            amount = abs(net)
+
+            result.append({
+                "txid": txid,
+                "type": tx_type,
+                "amount": amount,
+                "fee": fee if spent > 0 else None,
+                "confirmed": confirmed,
+            })
+
+        print(f"Fetched {len(result)} transactions for {self.user_addr}")
+        return result
+
     def retrieve_from_htlc(self, contract_addr: str, redeem_script_hex: str, secret_text: str):
         """
         Retrieves funds from the HTLC using the secret.
