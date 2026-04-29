@@ -7,6 +7,9 @@ from main import Wallet
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+CURRENCY_ICON = {"btc": "₿", "eth": "Ξ"}
+CURRENCY_COLOR = {"btc": "#f7931a", "eth": "#627eea"}
+
 
 class App(ctk.CTk):
     def __init__(self):
@@ -19,8 +22,10 @@ class App(ctk.CTk):
 
         self.current_user = None
         self.current_password = None
-        self.current_wallet = None
+        self.current_wallet = None        # wallet folder name
+        self.current_currency = None      # "btc" or "eth"
         self.current_wallet_obj = None
+        self.contract_confirm_data = {}
 
         self.container = ctk.CTkFrame(self)
         self.container.pack(fill="both", expand=True)
@@ -29,7 +34,13 @@ class App(ctk.CTk):
 
         self.frames = {}
 
-        for F in (LoginPage, RegisterPage, ProfilePage, NewWalletPage, WalletPage, SmartContractPage, NewTxPage, TxHistoryPage, ContractConfirmPage):
+        for F in (
+            LoginPage, RegisterPage, ProfilePage,
+            SelectCurrencyPage,
+            NewBtcWalletPage, NewEthWalletPage,
+            WalletPage, EthWalletPage,
+            SmartContractPage, NewTxPage, TxHistoryPage, ContractConfirmPage,
+        ):
             frame = F(self.container, self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -42,12 +53,17 @@ class App(ctk.CTk):
     def user_dir(self):
         return os.path.join(os.getcwd(), ".prison-wallet", self.current_user)
 
-    def wallets_dir(self):
-        return os.path.join(self.user_dir(), "wallets")
+    def wallets_dir(self, currency=None):
+        cur = currency or self.current_currency or "btc"
+        return os.path.join(self.user_dir(), "wallets", cur)
 
     def password_file(self):
         return os.path.join(self.user_dir(), "password.txt")
 
+
+# ---------------------------------------------------------------------------
+# Auth pages
+# ---------------------------------------------------------------------------
 
 class LoginPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -78,7 +94,6 @@ class LoginPage(ctk.CTkFrame):
         if not os.path.exists(user_path):
             messagebox.showerror("Error", "User does not exist")
             return
-
         if not os.path.exists(pw_file):
             messagebox.showerror("Error", "Password file missing")
             return
@@ -118,14 +133,15 @@ class RegisterPage(ctk.CTkFrame):
         password = self.pw.get()
 
         base_user = os.path.join(os.getcwd(), ".prison-wallet", username)
-        wallets = os.path.join(base_user, "wallets")
         pw_file = os.path.join(base_user, "password.txt")
 
         if os.path.exists(base_user):
             messagebox.showerror("Error", "User already exists")
             return
 
-        os.makedirs(wallets, exist_ok=True)
+        os.makedirs(base_user, exist_ok=True)
+        os.makedirs(os.path.join(base_user, "wallets", "btc"), exist_ok=True)
+        os.makedirs(os.path.join(base_user, "wallets", "eth"), exist_ok=True)
 
         with open(pw_file, "w") as f:
             f.write(password)
@@ -133,6 +149,10 @@ class RegisterPage(ctk.CTkFrame):
         messagebox.showinfo("Success", "User created")
         self.controller.show_frame("LoginPage")
 
+
+# ---------------------------------------------------------------------------
+# Profile — lists wallets from both currencies
+# ---------------------------------------------------------------------------
 
 class ProfilePage(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -145,11 +165,13 @@ class ProfilePage(ctk.CTkFrame):
         self.label = ctk.CTkLabel(self.content, text="Profile", font=(None, 30))
         self.label.pack(pady=10)
 
-        self.wallets_frame = ctk.CTkFrame(self.content)
+        self.wallets_frame = ctk.CTkScrollableFrame(self.content, width=400, height=300)
         self.wallets_frame.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="New Wallet", command=lambda: controller.show_frame("NewWalletPage"), width=200).pack(pady=5)
-        ctk.CTkButton(self.content, text="Logout", command=lambda: controller.show_frame("LoginPage"), width=200).pack(pady=5)
+        ctk.CTkButton(self.content, text="New Wallet",
+                      command=lambda: controller.show_frame("SelectCurrencyPage"), width=200).pack(pady=5)
+        ctk.CTkButton(self.content, text="Logout",
+                      command=lambda: controller.show_frame("LoginPage"), width=200).pack(pady=5)
 
         self.bind("<Visibility>", lambda e: self.refresh())
 
@@ -157,23 +179,40 @@ class ProfilePage(ctk.CTkFrame):
         for w in self.wallets_frame.winfo_children():
             w.destroy()
 
-        path = self.controller.wallets_dir()
-        os.makedirs(path, exist_ok=True)
+        for currency in ("btc", "eth"):
+            path = self.controller.wallets_dir(currency)
+            os.makedirs(path, exist_ok=True)
+            for fname in sorted(os.listdir(path)):
+                wallet_path = os.path.join(path, fname)
+                if not os.path.isdir(wallet_path):
+                    continue
 
-        for fname in sorted(os.listdir(path)):
-            wallet_path = os.path.join(path, fname)
-            if not os.path.isdir(wallet_path):
-                continue
-            btn = ctk.CTkButton(self.wallets_frame, text=fname,
-                                command=lambda f=fname: self.open_wallet(f))
-            btn.pack(pady=5)
+                icon = CURRENCY_ICON[currency]
+                color = CURRENCY_COLOR[currency]
 
-    def open_wallet(self, fname):
+                row = ctk.CTkFrame(self.wallets_frame, fg_color="transparent")
+                row.pack(fill="x", pady=3)
+
+                ctk.CTkLabel(row, text=icon, font=(None, 18, "bold"),
+                             text_color=color, width=30).pack(side="left", padx=(4, 6))
+                ctk.CTkButton(row, text=fname, anchor="w",
+                              command=lambda f=fname, c=currency: self.open_wallet(f, c),
+                              width=340).pack(side="left")
+
+    def open_wallet(self, fname, currency):
         self.controller.current_wallet = fname
-        self.controller.show_frame("WalletPage")
+        self.controller.current_currency = currency
+        if currency == "btc":
+            self.controller.show_frame("WalletPage")
+        else:
+            self.controller.show_frame("EthWalletPage")
 
 
-class NewWalletPage(ctk.CTkFrame):
+# ---------------------------------------------------------------------------
+# Select currency before creating a wallet
+# ---------------------------------------------------------------------------
+
+class SelectCurrencyPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
@@ -181,21 +220,57 @@ class NewWalletPage(ctk.CTkFrame):
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(self.content, text="Create / Import Wallet", font=(None, 30)).pack(pady=20)
+        ctk.CTkLabel(self.content, text="Select Currency", font=(None, 30)).pack(pady=20)
+        ctk.CTkLabel(self.content, text="Which type of wallet do you want to create?",
+                     font=(None, 14), text_color="gray").pack(pady=(0, 20))
+
+        ctk.CTkButton(
+            self.content, text=f"{CURRENCY_ICON['btc']}  Bitcoin (BTC)",
+            command=lambda: controller.show_frame("NewBtcWalletPage"),
+            width=260, height=60, font=(None, 22, "bold"),
+            fg_color=CURRENCY_COLOR["btc"], hover_color="#c97800",
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            self.content, text=f"{CURRENCY_ICON['eth']}  Ethereum (ETH)",
+            command=lambda: controller.show_frame("NewEthWalletPage"),
+            width=260, height=60, font=(None, 22, "bold"),
+            fg_color=CURRENCY_COLOR["eth"], hover_color="#3d56b0",
+        ).pack(pady=10)
+
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("ProfilePage"), width=200).pack(pady=(20, 10))
+
+
+# ---------------------------------------------------------------------------
+# New BTC wallet
+# ---------------------------------------------------------------------------
+
+class NewBtcWalletPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.content = ctk.CTkFrame(self)
+        self.content.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(self.content, text=f"{CURRENCY_ICON['btc']}  New Bitcoin Wallet",
+                     font=(None, 30), text_color=CURRENCY_COLOR["btc"]).pack(pady=20)
 
         self.name = ctk.CTkEntry(self.content, placeholder_text="Wallet name", width=400)
         self.name.pack(pady=10)
 
-        self.wif = ctk.CTkEntry(self.content, placeholder_text="Existing WIF (optional)", width=400)
+        self.wif = ctk.CTkEntry(self.content,
+                                placeholder_text="Existing WIF (optional – leave blank to generate)", width=400)
         self.wif.pack(pady=10)
 
-        self.import_button = ctk.CTkButton(self.content, text="Import Wallet", command=self.import_wallet, width=220)
-        self.import_button.pack(pady=5)
+        ctk.CTkButton(self.content, text="Import Wallet", command=self.import_wallet, width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Generate New Wallet", command=self.create_wallet, width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("SelectCurrencyPage"), width=220).pack(pady=5)
 
-        self.generate_button = ctk.CTkButton(self.content, text="Generate New Wallet", command=self.create_wallet, width=220)
-        self.generate_button.pack(pady=5)
-
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=220).pack(pady=5)
+    def _wallet_path(self, name):
+        return os.path.join(self.controller.wallets_dir("btc"), name)
 
     def create_wallet(self):
         name = self.name.get().strip()
@@ -203,7 +278,7 @@ class NewWalletPage(ctk.CTkFrame):
             messagebox.showerror("Error", "Please enter a wallet name")
             return
 
-        path = os.path.join(self.controller.wallets_dir(), name)
+        path = self._wallet_path(name)
         if os.path.exists(path):
             messagebox.showerror("Error", "Wallet already exists")
             return
@@ -222,23 +297,60 @@ class NewWalletPage(ctk.CTkFrame):
         if not name:
             messagebox.showerror("Error", "Please enter a wallet name")
             return
-
         if not wif:
             messagebox.showerror("Error", "Please enter the WIF to import")
             return
 
-        path = os.path.join(self.controller.wallets_dir(), name)
+        path = self._wallet_path(name)
         if os.path.exists(path):
             messagebox.showerror("Error", "Wallet already exists")
             return
 
         try:
-            _, address = Wallet.import_from_wif(password=self.controller.current_password, wif=wif, output_dir=path)
+            _, address = Wallet.import_from_wif(
+                password=self.controller.current_password, wif=wif, output_dir=path)
             messagebox.showinfo("Success", f"Wallet imported\nAddress: {address}")
             self.controller.show_frame("ProfilePage")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to import wallet: {e}")
 
+
+# ---------------------------------------------------------------------------
+# New ETH wallet — stub
+# ---------------------------------------------------------------------------
+
+class NewEthWalletPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.content = ctk.CTkFrame(self)
+        self.content.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(self.content, text=f"{CURRENCY_ICON['eth']}  New Ethereum Wallet",
+                     font=(None, 30), text_color=CURRENCY_COLOR["eth"]).pack(pady=20)
+
+        self.name = ctk.CTkEntry(self.content, placeholder_text="Wallet name", width=400)
+        self.name.pack(pady=10)
+
+        self.privkey = ctk.CTkEntry(self.content, placeholder_text="Existing private key (optional)", width=400)
+        self.privkey.pack(pady=10)
+
+        ctk.CTkButton(self.content, text="Import Wallet", command=self.stub, width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Generate New Wallet", command=self.stub, width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("SelectCurrencyPage"), width=220).pack(pady=5)
+
+        ctk.CTkLabel(self.content, text="⚠️  Ethereum support coming soon",
+                     font=(None, 13), text_color="gray").pack(pady=(20, 0))
+
+    def stub(self):
+        messagebox.showinfo("Not implemented", "Ethereum wallet creation is not yet implemented.")
+
+
+# ---------------------------------------------------------------------------
+# BTC Wallet page
+# ---------------------------------------------------------------------------
 
 class WalletPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -255,19 +367,25 @@ class WalletPage(ctk.CTkFrame):
         self.address_frame = ctk.CTkFrame(self.content, fg_color="transparent")
         self.address_frame.pack(fill="x", pady=10, padx=20)
 
-        self.address_label = ctk.CTkLabel(self.address_frame, text="Address: ?", anchor="w", justify="left", font=(None, 36))
+        self.address_label = ctk.CTkLabel(self.address_frame, text="Address: ?",
+                                          anchor="w", justify="left", font=(None, 36))
         self.address_label.pack(side="left", fill="x", expand=True)
 
-        self.copy_button = ctk.CTkButton(self.address_frame, text="📋", command=self.copy_address, width=40, state="disabled", font=(None, 24))
+        self.copy_button = ctk.CTkButton(self.address_frame, text="📋", command=self.copy_address,
+                                         width=40, state="disabled", font=(None, 24))
         self.copy_button.pack(side="left", padx=10)
 
         self.balance_label = ctk.CTkLabel(self.content, text="Balance: 0", font=(None, 36))
         self.balance_label.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="Create Transaction", command=lambda: controller.show_frame("NewTxPage"), width=240, font=(None, 24)).pack(pady=5)
-        ctk.CTkButton(self.content, text="Create Smart Contract", command=lambda: controller.show_frame("SmartContractPage"), width=240, font=(None, 24)).pack(pady=5)
-        ctk.CTkButton(self.content, text="Transaction History", command=lambda: controller.show_frame("TxHistoryPage"), width=240, font=(None, 24)).pack(pady=5)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
+        ctk.CTkButton(self.content, text="Create Transaction",
+                      command=lambda: controller.show_frame("NewTxPage"), width=240, font=(None, 24)).pack(pady=5)
+        ctk.CTkButton(self.content, text="Create Smart Contract",
+                      command=lambda: controller.show_frame("SmartContractPage"), width=240, font=(None, 24)).pack(pady=5)
+        ctk.CTkButton(self.content, text="Transaction History",
+                      command=lambda: controller.show_frame("TxHistoryPage"), width=240, font=(None, 24)).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
 
         self.bind("<Visibility>", lambda e: self.load_wallet())
 
@@ -278,7 +396,7 @@ class WalletPage(ctk.CTkFrame):
             self.copy_button.configure(state="disabled")
             return
 
-        wallet_dir = os.path.join(self.controller.wallets_dir(), self.controller.current_wallet)
+        wallet_dir = os.path.join(self.controller.wallets_dir("btc"), self.controller.current_wallet)
         try:
             wallet = Wallet()
             wallet.load_user_keys(password=self.controller.current_password, wallet_dir=wallet_dir)
@@ -287,7 +405,7 @@ class WalletPage(ctk.CTkFrame):
             address = wallet.user_addr or ""
             self.loaded_address = address
             self.balance_label.configure(text=f"Balance: {balance} satoshi")
-            self.label.configure(text=f"Wallet: {self.controller.current_wallet}")
+            self.label.configure(text=f"₿  {self.controller.current_wallet}")
             self.address_label.configure(text=f"Address: {address}")
             self.copy_button.configure(state="normal" if address else "disabled")
         except Exception as e:
@@ -300,11 +418,45 @@ class WalletPage(ctk.CTkFrame):
         if not self.loaded_address:
             messagebox.showerror("Error", "No wallet address available to copy")
             return
-
         self.clipboard_clear()
         self.clipboard_append(self.loaded_address)
         messagebox.showinfo("Copied", "Wallet address copied to clipboard")
 
+
+# ---------------------------------------------------------------------------
+# ETH Wallet page — stub
+# ---------------------------------------------------------------------------
+
+class EthWalletPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.content = ctk.CTkFrame(self)
+        self.content.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.label = ctk.CTkLabel(self.content, text="Ξ  ETH Wallet", font=(None, 50),
+                                  text_color=CURRENCY_COLOR["eth"])
+        self.label.pack(pady=20)
+
+        self.name_label = ctk.CTkLabel(self.content, text="", font=(None, 22))
+        self.name_label.pack(pady=5)
+
+        ctk.CTkLabel(self.content, text="⚠️  Ethereum wallet functionality coming soon.",
+                     font=(None, 16), text_color="gray").pack(pady=30)
+
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
+
+        self.bind("<Visibility>", lambda e: self.refresh())
+
+    def refresh(self):
+        self.name_label.configure(text=self.controller.current_wallet or "")
+
+
+# ---------------------------------------------------------------------------
+# Smart Contract page (unchanged)
+# ---------------------------------------------------------------------------
 
 class SmartContractPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -342,7 +494,8 @@ class SmartContractPage(ctk.CTkFrame):
         self.redeem_secret.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Retrieve Contract", command=self.retrieve_contract, width=240).pack(pady=10)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=240).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("WalletPage"), width=240).pack(pady=5)
 
     def create_contract(self):
         secret = self.secret_text.get().strip()
@@ -429,6 +582,10 @@ class SmartContractPage(ctk.CTkFrame):
             messagebox.showerror("Error", "Retrieval broadcast failed")
 
 
+# ---------------------------------------------------------------------------
+# New Transaction page (unchanged)
+# ---------------------------------------------------------------------------
+
 class NewTxPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
@@ -449,7 +606,8 @@ class NewTxPage(ctk.CTkFrame):
         self.amount.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Create", command=self.send, width=200).pack(pady=10)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=200).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("WalletPage"), width=200).pack(pady=5)
 
         self.bind("<Visibility>", lambda e: self.refresh_balance())
 
@@ -458,7 +616,6 @@ class NewTxPage(ctk.CTkFrame):
         if wallet is None:
             self.balance_label.configure(text="Balance: ?")
             return
-
         self.balance_label.configure(text=f"Balance: {wallet.satoshi} satoshi")
 
     def send(self):
@@ -486,7 +643,8 @@ class NewTxPage(ctk.CTkFrame):
             messagebox.showerror("Error", f"Unable to estimate fee: {e}")
             return
 
-        proceed = messagebox.askyesno("Confirm Transaction", f"Estimated fee: {fee} satoshi\n\nDo you want to continue?")
+        proceed = messagebox.askyesno("Confirm Transaction",
+                                      f"Estimated fee: {fee} satoshi\n\nDo you want to continue?")
         if not proceed:
             return
 
@@ -502,23 +660,26 @@ class NewTxPage(ctk.CTkFrame):
         self.controller.show_frame("WalletPage")
 
 
+# ---------------------------------------------------------------------------
+# Transaction History page (unchanged)
+# ---------------------------------------------------------------------------
+
 class TxHistoryPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
 
-        # Header
         header = ctk.CTkFrame(self)
         header.pack(fill="x", padx=20, pady=(20, 0))
 
         ctk.CTkLabel(header, text="Transaction History", font=(None, 30)).pack(side="left", padx=10)
         ctk.CTkButton(header, text="Refresh", command=self.load_history, width=120).pack(side="right", padx=10)
-        ctk.CTkButton(header, text="Back", command=lambda: controller.show_frame("WalletPage"), width=100).pack(side="right", padx=5)
+        ctk.CTkButton(header, text="Back",
+                      command=lambda: controller.show_frame("WalletPage"), width=100).pack(side="right", padx=5)
 
         self.status_label = ctk.CTkLabel(self, text="", font=(None, 14))
         self.status_label.pack(pady=(5, 0))
 
-        # Scrollable list
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
         self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
@@ -570,44 +731,27 @@ class TxHistoryPage(ctk.CTkFrame):
             top = ctk.CTkFrame(card, fg_color="transparent")
             top.pack(fill="x", padx=12, pady=(10, 4))
 
-            ctk.CTkLabel(
-                top,
-                text=type_label,
-                font=(None, 16, "bold"),
-                text_color=type_color,
-                width=140,
-                anchor="w",
-            ).pack(side="left")
-
-            ctk.CTkLabel(
-                top,
-                text=f"{amount:,} sat",
-                font=(None, 16, "bold"),
-                anchor="e",
-            ).pack(side="right")
+            ctk.CTkLabel(top, text=type_label, font=(None, 16, "bold"),
+                         text_color=type_color, width=140, anchor="w").pack(side="left")
+            ctk.CTkLabel(top, text=f"{amount:,} sat", font=(None, 16, "bold"),
+                         anchor="e").pack(side="right")
 
             bottom = ctk.CTkFrame(card, fg_color="transparent")
             bottom.pack(fill="x", padx=12, pady=(0, 10))
 
             short_txid = f"{txid[:16]}...{txid[-8:]}"
-            ctk.CTkLabel(
-                bottom,
-                text=f"TXID: {short_txid}",
-                font=(None, 11),
-                text_color="gray",
-                anchor="w",
-            ).pack(side="left")
+            ctk.CTkLabel(bottom, text=f"TXID: {short_txid}", font=(None, 11),
+                         text_color="gray", anchor="w").pack(side="left")
 
             status_text = "Confirmed" if confirmed else "Unconfirmed"
             status_color = "#2ecc71" if confirmed else "#f39c12"
-            ctk.CTkLabel(
-                bottom,
-                text=f"Fee: {fee_str}   |   {status_text}",
-                font=(None, 11),
-                text_color=status_color,
-                anchor="e",
-            ).pack(side="right")
+            ctk.CTkLabel(bottom, text=f"Fee: {fee_str}   |   {status_text}",
+                         font=(None, 11), text_color=status_color, anchor="e").pack(side="right")
 
+
+# ---------------------------------------------------------------------------
+# Contract Confirm page (unchanged)
+# ---------------------------------------------------------------------------
 
 class ContractConfirmPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -617,30 +761,31 @@ class ContractConfirmPage(ctk.CTkFrame):
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(self.content, text="✅ Contract Created", font=(None, 34, "bold"), text_color="#2ecc71").pack(pady=(20, 10))
-        ctk.CTkLabel(self.content, text="Save the details below — you will need them to retrieve funds.", font=(None, 14), text_color="gray").pack(pady=(0, 20))
+        ctk.CTkLabel(self.content, text="✅ Contract Created", font=(None, 34, "bold"),
+                     text_color="#2ecc71").pack(pady=(20, 10))
+        ctk.CTkLabel(self.content,
+                     text="Save the details below — you will need them to retrieve funds.",
+                     font=(None, 14), text_color="gray").pack(pady=(0, 20))
 
-        # Contract Address row
         addr_row = ctk.CTkFrame(self.content, fg_color="transparent")
         addr_row.pack(fill="x", padx=20, pady=6)
-        ctk.CTkLabel(addr_row, text="Contract Address", font=(None, 13), text_color="gray", width=160, anchor="w").pack(side="left")
+        ctk.CTkLabel(addr_row, text="Contract Address", font=(None, 13), text_color="gray",
+                     width=160, anchor="w").pack(side="left")
         self.addr_value = ctk.CTkLabel(addr_row, text="", font=(None, 14), anchor="w")
         self.addr_value.pack(side="left", fill="x", expand=True)
-        self.copy_addr_btn = ctk.CTkButton(addr_row, text="📋", width=40, font=(None, 16),
-                                           command=lambda: self._copy(self.addr_value.cget("text")))
-        self.copy_addr_btn.pack(side="left", padx=(8, 0))
+        ctk.CTkButton(addr_row, text="📋", width=40, font=(None, 16),
+                      command=lambda: self._copy(self.addr_value.cget("text"))).pack(side="left", padx=(8, 0))
 
-        # Redeem Script row
         rs_row = ctk.CTkFrame(self.content, fg_color="transparent")
         rs_row.pack(fill="x", padx=20, pady=6)
-        ctk.CTkLabel(rs_row, text="Redeem Script", font=(None, 13), text_color="gray", width=160, anchor="w").pack(side="left")
-        self.rs_value = ctk.CTkLabel(rs_row, text="", font=(None, 14), anchor="w", wraplength=460, justify="left")
+        ctk.CTkLabel(rs_row, text="Redeem Script", font=(None, 13), text_color="gray",
+                     width=160, anchor="w").pack(side="left")
+        self.rs_value = ctk.CTkLabel(rs_row, text="", font=(None, 14), anchor="w",
+                                     wraplength=460, justify="left")
         self.rs_value.pack(side="left", fill="x", expand=True)
-        self.copy_rs_btn = ctk.CTkButton(rs_row, text="📋", width=40, font=(None, 16),
-                                         command=lambda: self._copy(self.rs_value.cget("text")))
-        self.copy_rs_btn.pack(side="left", padx=(8, 0))
+        ctk.CTkButton(rs_row, text="📋", width=40, font=(None, 16),
+                      command=lambda: self._copy(self.rs_value.cget("text"))).pack(side="left", padx=(8, 0))
 
-        # Other info labels
         self.recipient_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
         self.recipient_label.pack(pady=4)
         self.amount_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
@@ -648,7 +793,8 @@ class ContractConfirmPage(ctk.CTkFrame):
         self.locktime_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
         self.locktime_label.pack(pady=4)
 
-        ctk.CTkButton(self.content, text="Back to Wallet", command=lambda: controller.show_frame("WalletPage"),
+        ctk.CTkButton(self.content, text="Back to Wallet",
+                      command=lambda: controller.show_frame("WalletPage"),
                       width=240, font=(None, 20)).pack(pady=(30, 20))
 
     def populate(self):
@@ -657,7 +803,8 @@ class ContractConfirmPage(ctk.CTkFrame):
         self.rs_value.configure(text=data["redeem_hex"])
         self.recipient_label.configure(text=f"Recipient:    {data['recipient']}")
         self.amount_label.configure(text=f"Amount:       {data['amount']:,} satoshi")
-        self.locktime_label.configure(text=f"Lock time:    {data['lock_minutes']} minutes  ({data['lock_blocks']} blocks)")
+        self.locktime_label.configure(
+            text=f"Lock time:    {data['lock_minutes']} minutes  ({data['lock_blocks']} blocks)")
 
     def _copy(self, text: str):
         self.clipboard_clear()
