@@ -1,15 +1,15 @@
 [project]
-name = "prison-wallet"
+name = "last-wallet"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "bitcoin-utils>=0.8.1",
-    "cryptography>=46.0.7",
+    "cryptography>=47.0.0",
     "customtkinter>=5.2.2",
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
-    "ruff>=0.15.9",
-    "ty>=0.0.29",
+    "ruff>=0.15.12",
+    "ty>=0.0.32",
 ]
