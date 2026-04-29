@@ -321,6 +321,47 @@ class Wallet:
                 print(f"Token {i} ({type(token)}): {token}")
             return None
 
+    def get_transaction_history(self) -> list:
+        """Fetches transaction history for the current address."""
+        if not self.user_addr:
+            return []
+
+        url = f"{API_BASE}/address/{self.user_addr}/txs"
+        response = requests.get(url)
+        if response.status_code != 200:
+            return []
+
+        txs = response.json()
+        history = []
+
+        for tx in txs:
+            # Determine type
+            is_incoming = any(vout['scriptpubkey_address'] == self.user_addr for vout in tx['vout'])
+            tx_type = "Incoming" if is_incoming else "Outgoing"
+            
+            # Determine address (simplified)
+            if is_incoming:
+                # If incoming, show where it came from (first input)
+                address = tx['vin'][0].get('prevout', {}).get('scriptpubkey_address', "Unknown")
+                amount = sum(vout['value'] for vout in tx['vout'] if vout['scriptpubkey_address'] == self.user_addr)
+            else:
+                # If outgoing, show where it went (first output that isn't me, or just first output)
+                destinations = [vout['scriptpubkey_address'] for vout in tx['vout'] if vout['scriptpubkey_address'] != self.user_addr]
+                address = destinations[0] if destinations else tx['vout'][0]['scriptpubkey_address']
+                # Amount spent (total output minus change) is complex to calculate accurately without all data, 
+                # using the sum of non-change outputs for this simple view.
+                amount = sum(vout['value'] for vout in tx['vout'] if vout['scriptpubkey_address'] != self.user_addr)
+
+            history.append({
+                "type": tx_type,
+                "status": "Confirmed" if tx['status']['confirmed'] else "Unconfirmed",
+                "address": address,
+                "amount": amount,
+                "fee": tx['fee']
+            })
+            
+        return history
+
 
 def main():
     w = Wallet()

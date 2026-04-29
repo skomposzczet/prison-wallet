@@ -1,5 +1,6 @@
 import os
 from tkinter import messagebox
+
 import customtkinter as ctk
 
 from main import Wallet
@@ -13,7 +14,7 @@ class App(ctk.CTk):
         super().__init__()
 
         self.title("Prison Wallet")
-        self.geometry("1200x900")
+        self.geometry("1200(900")
         self.minsize(900, 650)
         self.resizable(True, True)
 
@@ -29,7 +30,16 @@ class App(ctk.CTk):
 
         self.frames = {}
 
-        for F in (LoginPage, RegisterPage, ProfilePage, NewWalletPage, WalletPage, SmartContractPage, NewTxPage):
+        for F in (
+            LoginPage,
+            RegisterPage,
+            ProfilePage,
+            NewWalletPage,
+            WalletPage,
+            SmartContractPage,
+            NewTxPage,
+            TransactionHistoryPage,
+        ):
             frame = F(self.container, self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -66,7 +76,9 @@ class LoginPage(ctk.CTkFrame):
         self.pw.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Login", command=self.login, width=200).pack(pady=10)
-        ctk.CTkButton(self.content, text="Register", command=lambda: controller.show_frame("RegisterPage"), width=200).pack(pady=5)
+        ctk.CTkButton(
+            self.content, text="Register", command=lambda: controller.show_frame("RegisterPage"), width=200
+        ).pack(pady=5)
 
     def login(self):
         username = self.user.get()
@@ -111,7 +123,9 @@ class RegisterPage(ctk.CTkFrame):
         self.pw.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Create", command=self.register, width=200).pack(pady=10)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("LoginPage"), width=200).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("LoginPage"), width=200).pack(
+            pady=5
+        )
 
     def register(self):
         username = self.user.get()
@@ -148,8 +162,12 @@ class ProfilePage(ctk.CTkFrame):
         self.wallets_frame = ctk.CTkFrame(self.content)
         self.wallets_frame.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="New Wallet", command=lambda: controller.show_frame("NewWalletPage"), width=200).pack(pady=5)
-        ctk.CTkButton(self.content, text="Logout", command=lambda: controller.show_frame("LoginPage"), width=200).pack(pady=5)
+        ctk.CTkButton(
+            self.content, text="New Wallet", command=lambda: controller.show_frame("NewWalletPage"), width=200
+        ).pack(pady=5)
+        ctk.CTkButton(self.content, text="Logout", command=lambda: controller.show_frame("LoginPage"), width=200).pack(
+            pady=5
+        )
 
         self.bind("<Visibility>", lambda e: self.refresh())
 
@@ -164,8 +182,7 @@ class ProfilePage(ctk.CTkFrame):
             wallet_path = os.path.join(path, fname)
             if not os.path.isdir(wallet_path):
                 continue
-            btn = ctk.CTkButton(self.wallets_frame, text=fname,
-                                command=lambda f=fname: self.open_wallet(f))
+            btn = ctk.CTkButton(self.wallets_frame, text=fname, command=lambda f=fname: self.open_wallet(f))
             btn.pack(pady=5)
 
     def open_wallet(self, fname):
@@ -192,10 +209,14 @@ class NewWalletPage(ctk.CTkFrame):
         self.import_button = ctk.CTkButton(self.content, text="Import Wallet", command=self.import_wallet, width=220)
         self.import_button.pack(pady=5)
 
-        self.generate_button = ctk.CTkButton(self.content, text="Generate New Wallet", command=self.create_wallet, width=220)
+        self.generate_button = ctk.CTkButton(
+            self.content, text="Generate New Wallet", command=self.create_wallet, width=220
+        )
         self.generate_button.pack(pady=5)
 
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=220).pack(
+            pady=5
+        )
 
     def create_wallet(self):
         name = self.name.get().strip()
@@ -255,18 +276,43 @@ class WalletPage(ctk.CTkFrame):
         self.address_frame = ctk.CTkFrame(self.content, fg_color="transparent")
         self.address_frame.pack(fill="x", pady=10, padx=20)
 
-        self.address_label = ctk.CTkLabel(self.address_frame, text="Address: ?", anchor="w", justify="left", font=(None, 36))
+        self.address_label = ctk.CTkLabel(
+            self.address_frame, text="Address: ?", anchor="w", justify="left", font=(None, 36)
+        )
         self.address_label.pack(side="left", fill="x", expand=True)
 
-        self.copy_button = ctk.CTkButton(self.address_frame, text="📋", command=self.copy_address, width=40, state="disabled", font=(None, 24))
+        self.copy_button = ctk.CTkButton(
+            self.address_frame, text="📋", command=self.copy_address, width=40, state="disabled", font=(None, 24)
+        )
         self.copy_button.pack(side="left", padx=10)
 
         self.balance_label = ctk.CTkLabel(self.content, text="Balance: 0", font=(None, 36))
         self.balance_label.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="Create Transaction", command=lambda: controller.show_frame("NewTxPage"), width=240, font=(None, 24)).pack(pady=5)
-        ctk.CTkButton(self.content, text="Create Smart Contract", command=lambda: controller.show_frame("SmartContractPage"), width=240, font=(None, 24)).pack(pady=5)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
+        ctk.CTkButton(
+            self.content,
+            text="Transaction History",
+            command=lambda: controller.show_frame("TransactionHistoryPage"),
+            width=240,
+            font=(None, 24),
+        ).pack(pady=5)
+        ctk.CTkButton(
+            self.content,
+            text="Create Transaction",
+            command=lambda: controller.show_frame("NewTxPage"),
+            width=240,
+            font=(None, 24),
+        ).pack(pady=5)
+        ctk.CTkButton(
+            self.content,
+            text="Create Smart Contract",
+            command=lambda: controller.show_frame("SmartContractPage"),
+            width=240,
+            font=(None, 24),
+        ).pack(pady=5)
+        ctk.CTkButton(
+            self.content, text="Back", command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)
+        ).pack(pady=5)
 
         self.bind("<Visibility>", lambda e: self.load_wallet())
 
@@ -305,6 +351,55 @@ class WalletPage(ctk.CTkFrame):
         messagebox.showinfo("Copied", "Wallet address copied to clipboard")
 
 
+class TransactionHistoryPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.label = ctk.CTkLabel(self, text="Transaction History", font=(None, 30))
+        self.label.pack(pady=20)
+
+        self.scrollable_frame = ctk.CTkScrollableFrame(self, width=800, height=500)
+        self.scrollable_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        ctk.CTkButton(self, text="Back", command=lambda: controller.show_frame("WalletPage"), width=200).pack(pady=20)
+
+        self.bind("<Visibility>", lambda e: self.refresh())
+
+    def refresh(self):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        wallet = self.controller.current_wallet_obj
+        if not wallet:
+            return
+
+        try:
+            history = wallet.get_transaction_history()
+            if not history:
+                ctk.CTkLabel(self.scrollable_frame, text="No transactions found.").pack(pady=20)
+                return
+
+            for tx in history:
+                frame = ctk.CTkFrame(self.scrollable_frame)
+                frame.pack(pady=5, padx=10, fill="x")
+
+                color = "#2ecc71" if tx["type"] == "Incoming" else "#e74c3c"
+
+                header = f"{tx['type']} | {tx['status']} | {tx['amount']} sat"
+                ctk.CTkLabel(frame, text=header, font=(None, 16, "bold"), text_color=color).pack(
+                    anchor="w", padx=10, pady=(5, 0)
+                )
+
+                details = f"Address: {tx['address']}\nFee: {tx['fee']} sat"
+                ctk.CTkLabel(frame, text=details, font=(None, 12), justify="left").pack(
+                    anchor="w", padx=10, pady=(0, 5)
+                )
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load history: {e}")
+
+
 class SmartContractPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
@@ -341,7 +436,9 @@ class SmartContractPage(ctk.CTkFrame):
         self.redeem_secret.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Retrieve Contract", command=self.retrieve_contract, width=240).pack(pady=10)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=240).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=240).pack(
+            pady=5
+        )
 
     def create_contract(self):
         secret = self.secret_text.get().strip()
@@ -388,7 +485,7 @@ class SmartContractPage(ctk.CTkFrame):
 
         messagebox.showinfo(
             "Smart Contract Created",
-            f"Contract Address: {contract_addr}\nRedeem Script: {redeem_hex}\nLock time: {lock_minutes} minutes ({lock_blocks} blocks)\nAmount: {amount} satoshi"
+            f"Contract Address: {contract_addr}\nRedeem Script: {redeem_hex}\nLock time: {lock_minutes} minutes ({lock_blocks} blocks)\nAmount: {amount} satoshi",
         )
         self.controller.show_frame("WalletPage")
 
@@ -443,7 +540,9 @@ class NewTxPage(ctk.CTkFrame):
         self.amount.pack(pady=10)
 
         ctk.CTkButton(self.content, text="Create", command=self.send, width=200).pack(pady=10)
-        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=200).pack(pady=5)
+        ctk.CTkButton(self.content, text="Back", command=lambda: controller.show_frame("WalletPage"), width=200).pack(
+            pady=5
+        )
 
         self.bind("<Visibility>", lambda e: self.refresh_balance())
 
@@ -480,7 +579,9 @@ class NewTxPage(ctk.CTkFrame):
             messagebox.showerror("Error", f"Unable to estimate fee: {e}")
             return
 
-        proceed = messagebox.askyesno("Confirm Transaction", f"Estimated fee: {fee} satoshi\n\nDo you want to continue?")
+        proceed = messagebox.askyesno(
+            "Confirm Transaction", f"Estimated fee: {fee} satoshi\n\nDo you want to continue?"
+        )
         if not proceed:
             return
 
@@ -499,4 +600,3 @@ class NewTxPage(ctk.CTkFrame):
 if __name__ == "__main__":
     app = App()
     app.mainloop()
-
