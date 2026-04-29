@@ -29,7 +29,7 @@ class App(ctk.CTk):
 
         self.frames = {}
 
-        for F in (LoginPage, RegisterPage, ProfilePage, NewWalletPage, WalletPage, SmartContractPage, NewTxPage, TxHistoryPage):
+        for F in (LoginPage, RegisterPage, ProfilePage, NewWalletPage, WalletPage, SmartContractPage, NewTxPage, TxHistoryPage, ContractConfirmPage):
             frame = F(self.container, self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -387,11 +387,16 @@ class SmartContractPage(ctk.CTkFrame):
             messagebox.showerror("Error", f"Failed to create smart contract: {e}")
             return
 
-        messagebox.showinfo(
-            "Smart Contract Created",
-            f"Contract Address: {contract_addr}\nRedeem Script: {redeem_hex}\nLock time: {lock_minutes} minutes ({lock_blocks} blocks)\nAmount: {amount} satoshi"
-        )
-        self.controller.show_frame("WalletPage")
+        self.controller.contract_confirm_data = {
+            "contract_addr": contract_addr,
+            "redeem_hex": redeem_hex,
+            "lock_minutes": lock_minutes,
+            "lock_blocks": lock_blocks,
+            "amount": amount,
+            "recipient": recipient,
+        }
+        self.controller.frames["ContractConfirmPage"].populate()
+        self.controller.show_frame("ContractConfirmPage")
 
     def retrieve_contract(self):
         contract_addr = self.contract_address.get().strip()
@@ -602,6 +607,62 @@ class TxHistoryPage(ctk.CTkFrame):
                 text_color=status_color,
                 anchor="e",
             ).pack(side="right")
+
+
+class ContractConfirmPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.content = ctk.CTkFrame(self)
+        self.content.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(self.content, text="✅ Contract Created", font=(None, 34, "bold"), text_color="#2ecc71").pack(pady=(20, 10))
+        ctk.CTkLabel(self.content, text="Save the details below — you will need them to retrieve funds.", font=(None, 14), text_color="gray").pack(pady=(0, 20))
+
+        # Contract Address row
+        addr_row = ctk.CTkFrame(self.content, fg_color="transparent")
+        addr_row.pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(addr_row, text="Contract Address", font=(None, 13), text_color="gray", width=160, anchor="w").pack(side="left")
+        self.addr_value = ctk.CTkLabel(addr_row, text="", font=(None, 14), anchor="w")
+        self.addr_value.pack(side="left", fill="x", expand=True)
+        self.copy_addr_btn = ctk.CTkButton(addr_row, text="📋", width=40, font=(None, 16),
+                                           command=lambda: self._copy(self.addr_value.cget("text")))
+        self.copy_addr_btn.pack(side="left", padx=(8, 0))
+
+        # Redeem Script row
+        rs_row = ctk.CTkFrame(self.content, fg_color="transparent")
+        rs_row.pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(rs_row, text="Redeem Script", font=(None, 13), text_color="gray", width=160, anchor="w").pack(side="left")
+        self.rs_value = ctk.CTkLabel(rs_row, text="", font=(None, 14), anchor="w", wraplength=460, justify="left")
+        self.rs_value.pack(side="left", fill="x", expand=True)
+        self.copy_rs_btn = ctk.CTkButton(rs_row, text="📋", width=40, font=(None, 16),
+                                         command=lambda: self._copy(self.rs_value.cget("text")))
+        self.copy_rs_btn.pack(side="left", padx=(8, 0))
+
+        # Other info labels
+        self.recipient_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
+        self.recipient_label.pack(pady=4)
+        self.amount_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
+        self.amount_label.pack(pady=4)
+        self.locktime_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
+        self.locktime_label.pack(pady=4)
+
+        ctk.CTkButton(self.content, text="Back to Wallet", command=lambda: controller.show_frame("WalletPage"),
+                      width=240, font=(None, 20)).pack(pady=(30, 20))
+
+    def populate(self):
+        data = self.controller.contract_confirm_data
+        self.addr_value.configure(text=data["contract_addr"])
+        self.rs_value.configure(text=data["redeem_hex"])
+        self.recipient_label.configure(text=f"Recipient:    {data['recipient']}")
+        self.amount_label.configure(text=f"Amount:       {data['amount']:,} satoshi")
+        self.locktime_label.configure(text=f"Lock time:    {data['lock_minutes']} minutes  ({data['lock_blocks']} blocks)")
+
+    def _copy(self, text: str):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        messagebox.showinfo("Copied", "Copied to clipboard")
 
 
 if __name__ == "__main__":
