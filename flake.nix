@@ -83,6 +83,7 @@
               scipy
               base58
               customtkinter
+              python-dotenv
             ];
           };
         }

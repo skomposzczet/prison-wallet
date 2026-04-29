@@ -2,3 +2,5 @@
 .venv
 stuff
 .prison-wallet
+__pycache__
+*.bak
