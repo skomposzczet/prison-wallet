@@ -39,6 +39,7 @@ class App(ctk.CTk):
         self.current_wallet = None        # wallet folder name
         self.current_currency = None      # "btc" or "eth"
         self.current_wallet_obj = None
+        self.current_wallet_key = None
         self.contract_confirm_data = {}
 
         self.container = ctk.CTkFrame(self)
@@ -46,24 +47,34 @@ class App(ctk.CTk):
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
 
+        self.page_classes = {
+            F.__name__: F for F in (
+                LoginPage, RegisterPage, ProfilePage,
+                SelectCurrencyPage,
+                NewBtcWalletPage, NewEthWalletPage,
+                WalletPage, EthWalletPage,
+                EthNewTxPage, EthTxHistoryPage,
+                SmartContractPage, NewTxPage, TxHistoryPage, ContractConfirmPage,
+            )
+        }
         self.frames = {}
-
-        for F in (
-            LoginPage, RegisterPage, ProfilePage,
-            SelectCurrencyPage,
-            NewBtcWalletPage, NewEthWalletPage,
-            WalletPage, EthWalletPage,
-            EthNewTxPage, EthTxHistoryPage,
-            SmartContractPage, NewTxPage, TxHistoryPage, ContractConfirmPage,
-        ):
-            frame = F(self.container, self)
-            self.frames[F.__name__] = frame
-            frame.grid(row=0, column=0, sticky="nsew")
 
         self.show_frame("LoginPage")
 
+    def get_frame(self, name):
+        if name not in self.frames:
+            frame_class = self.page_classes[name]
+            frame = frame_class(self.container, self)
+            self.frames[name] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+        return self.frames[name]
+
     def show_frame(self, name):
-        self.frames[name].tkraise()
+        frame = self.get_frame(name)
+        frame.tkraise()
+        on_show = getattr(frame, "on_show", None)
+        if on_show:
+            on_show()
 
     def user_dir(self):
         return os.path.join(os.getcwd(), ".prison-wallet", self.current_user)
@@ -119,6 +130,10 @@ class LoginPage(ctk.CTkFrame):
         if password == stored_pw:
             self.controller.current_user = username
             self.controller.current_password = password
+            self.controller.current_wallet = None
+            self.controller.current_currency = None
+            self.controller.current_wallet_obj = None
+            self.controller.current_wallet_key = None
             self.controller.show_frame("ProfilePage")
         else:
             messagebox.showerror("Error", "Wrong password")
@@ -188,7 +203,8 @@ class ProfilePage(ctk.CTkFrame):
         ctk.CTkButton(self.content, text="Logout",
                       command=lambda: controller.show_frame("LoginPage"), width=200).pack(pady=5)
 
-        self.bind("<Visibility>", lambda e: self.refresh())
+    def on_show(self):
+        self.refresh()
 
     def refresh(self):
         for w in self.wallets_frame.winfo_children():
@@ -217,6 +233,8 @@ class ProfilePage(ctk.CTkFrame):
     def open_wallet(self, fname, currency):
         self.controller.current_wallet = fname
         self.controller.current_currency = currency
+        self.controller.current_wallet_obj = None
+        self.controller.current_wallet_key = None
         if currency == "btc":
             self.controller.show_frame("WalletPage")
         else:
@@ -420,6 +438,7 @@ class WalletPage(ctk.CTkFrame):
         super().__init__(parent)
         self.controller = controller
         self.loaded_address = ""
+        self.load_generation = 0
 
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
@@ -450,7 +469,8 @@ class WalletPage(ctk.CTkFrame):
         ctk.CTkButton(self.content, text="Back",
                       command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
 
-        self.bind("<Visibility>", lambda e: self.load_wallet())
+    def on_show(self):
+        self.load_wallet()
 
     def load_wallet(self):
         if not self.controller.current_wallet:
@@ -459,23 +479,57 @@ class WalletPage(ctk.CTkFrame):
             self.copy_button.configure(state="disabled")
             return
 
+        wallet_key = ("btc", self.controller.current_wallet)
+        if self.controller.current_wallet_key == wallet_key and isinstance(self.controller.current_wallet_obj, Wallet):
+            self.show_wallet(self.controller.current_wallet_obj)
+            return
+
         wallet_dir = os.path.join(self.controller.wallets_dir("btc"), self.controller.current_wallet)
-        try:
-            wallet = Wallet()
-            wallet.load_user_keys(password=self.controller.current_password, wallet_dir=wallet_dir)
-            self.controller.current_wallet_obj = wallet
-            balance = wallet.satoshi
-            address = wallet.user_addr or ""
-            self.loaded_address = address
-            self.balance_label.configure(text=f"Balance: {balance} satoshi")
-            self.label.configure(text=f"₿  {self.controller.current_wallet}")
-            self.address_label.configure(text=f"Address: {address}")
-            self.copy_button.configure(state="normal" if address else "disabled")
-        except Exception as e:
-            messagebox.showerror("Error", f"Unable to load wallet: {e}")
-            self.balance_label.configure(text="Balance: ?")
-            self.address_label.configure(text="Address: ?")
-            self.copy_button.configure(state="disabled")
+        wallet_name = self.controller.current_wallet
+        password = self.controller.current_password
+        self.load_generation += 1
+        generation = self.load_generation
+
+        self.label.configure(text=f"₿  {wallet_name}")
+        self.balance_label.configure(text="Balance: loading...")
+        self.address_label.configure(text="Address: loading...")
+        self.copy_button.configure(state="disabled")
+
+        def _load():
+            try:
+                wallet = Wallet()
+                wallet.load_user_keys(password=password, wallet_dir=wallet_dir)
+            except Exception as e:
+                self.after(0, lambda err=e, gen=generation: self.show_wallet_error(err, gen))
+                return
+            self.after(0, lambda w=wallet, key=wallet_key, gen=generation: self.finish_wallet_load(w, key, gen))
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def finish_wallet_load(self, wallet, wallet_key, generation):
+        selected_key = (self.controller.current_currency, self.controller.current_wallet)
+        if generation != self.load_generation or selected_key != wallet_key:
+            return
+        self.controller.current_wallet_obj = wallet
+        self.controller.current_wallet_key = wallet_key
+        self.show_wallet(wallet)
+
+    def show_wallet(self, wallet):
+        balance = wallet.satoshi
+        address = wallet.user_addr or ""
+        self.loaded_address = address
+        self.balance_label.configure(text=f"Balance: {balance} satoshi")
+        self.label.configure(text=f"₿  {self.controller.current_wallet}")
+        self.address_label.configure(text=f"Address: {address}")
+        self.copy_button.configure(state="normal" if address else "disabled")
+
+    def show_wallet_error(self, error, generation):
+        if generation != self.load_generation:
+            return
+        messagebox.showerror("Error", f"Unable to load wallet: {error}")
+        self.balance_label.configure(text="Balance: ?")
+        self.address_label.configure(text="Address: ?")
+        self.copy_button.configure(state="disabled")
 
     def copy_address(self):
         if not self.loaded_address:
@@ -495,6 +549,7 @@ class EthWalletPage(ctk.CTkFrame):
         super().__init__(parent)
         self.controller = controller
         self.loaded_address = ""
+        self.load_generation = 0
 
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
@@ -533,7 +588,8 @@ class EthWalletPage(ctk.CTkFrame):
                       command=lambda: controller.show_frame("ProfilePage"),
                       width=240, font=(None, 24)).pack(pady=5)
 
-        self.bind("<Visibility>", lambda e: self.load_wallet())
+    def on_show(self):
+        self.load_wallet()
 
     def load_wallet(self):
         if not self.controller.current_wallet:
@@ -542,28 +598,60 @@ class EthWalletPage(ctk.CTkFrame):
             self.copy_button.configure(state="disabled")
             return
 
+        wallet_key = ("eth", self.controller.current_wallet)
+        if self.controller.current_wallet_key == wallet_key and isinstance(self.controller.current_wallet_obj, EthWallet):
+            self.show_wallet(self.controller.current_wallet_obj)
+            return
+
         wallet_dir = os.path.join(
             self.controller.wallets_dir("eth"), self.controller.current_wallet
         )
-        try:
-            wallet = EthWallet()
-            wallet.load_user_keys(
-                password=self.controller.current_password, wallet_dir=wallet_dir
-            )
-            self.controller.current_wallet_obj = wallet
-            address = wallet.user_addr or ""
-            self.loaded_address = address
-            self.label.configure(text=f"Ξ  {self.controller.current_wallet}")
-            self.address_label.configure(text=f"Address: {address}")
-            self.balance_label.configure(
-                text=f"Balance: {wallet.eth:.6f} ETH  ({fmt_wei(wallet.wei)})"
-            )
-            self.copy_button.configure(state="normal" if address else "disabled")
-        except Exception as e:
-            messagebox.showerror("Error", f"Unable to load ETH wallet: {e}")
-            self.balance_label.configure(text="Balance: ?")
-            self.address_label.configure(text="Address: ?")
-            self.copy_button.configure(state="disabled")
+        wallet_name = self.controller.current_wallet
+        password = self.controller.current_password
+        self.load_generation += 1
+        generation = self.load_generation
+
+        self.label.configure(text=f"Ξ  {wallet_name}")
+        self.balance_label.configure(text="Balance: loading...")
+        self.address_label.configure(text="Address: loading...")
+        self.copy_button.configure(state="disabled")
+
+        def _load():
+            try:
+                wallet = EthWallet()
+                wallet.load_user_keys(password=password, wallet_dir=wallet_dir)
+            except Exception as e:
+                self.after(0, lambda err=e, gen=generation: self.show_wallet_error(err, gen))
+                return
+            self.after(0, lambda w=wallet, key=wallet_key, gen=generation: self.finish_wallet_load(w, key, gen))
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def finish_wallet_load(self, wallet, wallet_key, generation):
+        selected_key = (self.controller.current_currency, self.controller.current_wallet)
+        if generation != self.load_generation or selected_key != wallet_key:
+            return
+        self.controller.current_wallet_obj = wallet
+        self.controller.current_wallet_key = wallet_key
+        self.show_wallet(wallet)
+
+    def show_wallet(self, wallet):
+        address = wallet.user_addr or ""
+        self.loaded_address = address
+        self.label.configure(text=f"Ξ  {self.controller.current_wallet}")
+        self.address_label.configure(text=f"Address: {address}")
+        self.balance_label.configure(
+            text=f"Balance: {wallet.eth:.6f} ETH  ({fmt_wei(wallet.wei)})"
+        )
+        self.copy_button.configure(state="normal" if address else "disabled")
+
+    def show_wallet_error(self, error, generation):
+        if generation != self.load_generation:
+            return
+        messagebox.showerror("Error", f"Unable to load ETH wallet: {error}")
+        self.balance_label.configure(text="Balance: ?")
+        self.address_label.configure(text="Address: ?")
+        self.copy_button.configure(state="disabled")
 
     def copy_address(self):
         if not self.loaded_address:
@@ -603,7 +691,8 @@ class EthNewTxPage(ctk.CTkFrame):
         ctk.CTkButton(self.content, text="Back",
                       command=lambda: controller.show_frame("EthWalletPage"), width=200).pack(pady=5)
 
-        self.bind("<Visibility>", lambda e: self.refresh_balance())
+    def on_show(self):
+        self.refresh_balance()
 
     def refresh_balance(self):
         wallet = self.controller.current_wallet_obj
@@ -700,7 +789,8 @@ class EthTxHistoryPage(ctk.CTkFrame):
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
         self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-        self.bind("<Visibility>", lambda e: self.load_history())
+    def on_show(self):
+        self.load_history()
 
     def load_history(self):
         wallet = self.controller.current_wallet_obj
@@ -856,7 +946,8 @@ class SmartContractPage(ctk.CTkFrame):
                                          command=self.go_back, width=240)
         self.back_button.pack(pady=10)
 
-        self.bind("<Visibility>", lambda e: self.refresh_mode())
+    def on_show(self):
+        self.refresh_mode()
 
     def refresh_mode(self):
         self.btc_frame.pack_forget()
@@ -937,7 +1028,7 @@ class SmartContractPage(ctk.CTkFrame):
             "explorer_address": f"https://sepolia.etherscan.io/address/{result['contract_address']}",
             "explorer_tx": f"https://sepolia.etherscan.io/tx/{result['tx_hash']}",
         }
-        self.controller.frames["ContractConfirmPage"].populate()
+        self.controller.get_frame("ContractConfirmPage").populate()
         self.controller.show_frame("ContractConfirmPage")
 
     def _finish_eth_deploy_error(self, error: Exception):
@@ -997,7 +1088,7 @@ class SmartContractPage(ctk.CTkFrame):
             "amount": amount,
             "recipient": recipient,
         }
-        self.controller.frames["ContractConfirmPage"].populate()
+        self.controller.get_frame("ContractConfirmPage").populate()
         self.controller.show_frame("ContractConfirmPage")
 
     def retrieve_contract(self):
@@ -1058,7 +1149,8 @@ class NewTxPage(ctk.CTkFrame):
         ctk.CTkButton(self.content, text="Back",
                       command=lambda: controller.show_frame("WalletPage"), width=200).pack(pady=5)
 
-        self.bind("<Visibility>", lambda e: self.refresh_balance())
+    def on_show(self):
+        self.refresh_balance()
 
     def refresh_balance(self):
         wallet = self.controller.current_wallet_obj
@@ -1132,7 +1224,8 @@ class TxHistoryPage(ctk.CTkFrame):
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
         self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-        self.bind("<Visibility>", lambda e: self.load_history())
+    def on_show(self):
+        self.load_history()
 
     def load_history(self):
         wallet = self.controller.current_wallet_obj
