@@ -9,6 +9,7 @@ dependencies = [
     "cryptography>=47.0.0",
     "customtkinter>=5.2.2",
     "eth-account>=0.13.7",
+    "py-solc-x>=2.0.4",
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
     "ruff>=0.15.12",

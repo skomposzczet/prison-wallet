@@ -12,6 +12,18 @@ ctk.set_default_color_theme("blue")
 CURRENCY_ICON = {"btc": "₿", "eth": "Ξ"}
 CURRENCY_COLOR = {"btc": "#f7931a", "eth": "#627eea"}
 
+DEFAULT_SOLIDITY_CONTRACT = """// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract HelloWorld {
+    string private message = "Hello from Prison Wallet";
+
+    function greet(string memory name) public view returns (string memory) {
+        return string(abi.encodePacked(message, ", ", name));
+    }
+}
+"""
+
 
 class App(ctk.CTk):
     def __init__(self):
@@ -511,6 +523,9 @@ class EthWalletPage(ctk.CTkFrame):
                       command=lambda: controller.show_frame("EthNewTxPage"),
                       width=240, font=(None, 24),
                       fg_color=CURRENCY_COLOR["eth"], hover_color="#3d56b0").pack(pady=5)
+        ctk.CTkButton(self.content, text="Deploy Smart Contract",
+                      command=lambda: controller.show_frame("SmartContractPage"),
+                      width=240, font=(None, 24)).pack(pady=5)
         ctk.CTkButton(self.content, text="Transaction History",
                       command=lambda: controller.show_frame("EthTxHistoryPage"),
                       width=240, font=(None, 24)).pack(pady=5)
@@ -690,13 +705,14 @@ class EthTxHistoryPage(ctk.CTkFrame):
     def load_history(self):
         wallet = self.controller.current_wallet_obj
         if wallet is None or not hasattr(wallet, "wei") or not wallet.user_addr:
+            for w in self.scroll_frame.winfo_children():
+                w.destroy()
             self.status_label.configure(text="No ETH wallet loaded.")
             return
 
         for w in self.scroll_frame.winfo_children():
             w.destroy()
-        self.status_label.configure(
-            text="⏳ Scanning recent blocks… (may take a moment)")
+        self.status_label.configure(text="Loading...")
         self.update_idletasks()
 
         def _fetch():
@@ -773,7 +789,7 @@ class EthTxHistoryPage(ctk.CTkFrame):
 
 
 # ---------------------------------------------------------------------------
-# Smart Contract page (unchanged)
+# Smart Contract page
 # ---------------------------------------------------------------------------
 
 class SmartContractPage(ctk.CTkFrame):
@@ -784,36 +800,150 @@ class SmartContractPage(ctk.CTkFrame):
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(self.content, text="New Smart Contract", font=(None, 30)).pack(pady=20)
+        self.title_label = ctk.CTkLabel(self.content, text="New Smart Contract", font=(None, 30))
+        self.title_label.pack(pady=20)
 
-        self.secret_text = ctk.CTkEntry(self.content, placeholder_text="Secret text", width=500)
+        self.btc_frame = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.eth_frame = ctk.CTkFrame(self.content, fg_color="transparent")
+
+        self.secret_text = ctk.CTkEntry(self.btc_frame, placeholder_text="Secret text", width=500)
         self.secret_text.pack(pady=10)
 
-        self.recipient_address = ctk.CTkEntry(self.content, placeholder_text="Recipient wallet address", width=500)
+        self.recipient_address = ctk.CTkEntry(self.btc_frame, placeholder_text="Recipient wallet address", width=500)
         self.recipient_address.pack(pady=10)
 
-        self.lock_time = ctk.CTkEntry(self.content, placeholder_text="Lock time (minutes)", width=500)
+        self.lock_time = ctk.CTkEntry(self.btc_frame, placeholder_text="Lock time (minutes)", width=500)
         self.lock_time.pack(pady=10)
 
-        self.lock_amount = ctk.CTkEntry(self.content, placeholder_text="Amount to lock (satoshi)", width=500)
+        self.lock_amount = ctk.CTkEntry(self.btc_frame, placeholder_text="Amount to lock (satoshi)", width=500)
         self.lock_amount.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="Create Contract", command=self.create_contract, width=240).pack(pady=10)
+        ctk.CTkButton(self.btc_frame, text="Create Contract", command=self.create_contract, width=240).pack(pady=10)
 
-        ctk.CTkLabel(self.content, text="Retrieve Contract", font=(None, 24)).pack(pady=20)
+        ctk.CTkLabel(self.btc_frame, text="Retrieve Contract", font=(None, 24)).pack(pady=20)
 
-        self.contract_address = ctk.CTkEntry(self.content, placeholder_text="Contract address", width=500)
+        self.contract_address = ctk.CTkEntry(self.btc_frame, placeholder_text="Contract address", width=500)
         self.contract_address.pack(pady=10)
 
-        self.redeem_script = ctk.CTkEntry(self.content, placeholder_text="Redeem script hex", width=500)
+        self.redeem_script = ctk.CTkEntry(self.btc_frame, placeholder_text="Redeem script hex", width=500)
         self.redeem_script.pack(pady=10)
 
-        self.redeem_secret = ctk.CTkEntry(self.content, placeholder_text="Secret text", width=500)
+        self.redeem_secret = ctk.CTkEntry(self.btc_frame, placeholder_text="Secret text", width=500)
         self.redeem_secret.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="Retrieve Contract", command=self.retrieve_contract, width=240).pack(pady=10)
-        ctk.CTkButton(self.content, text="Back",
-                      command=lambda: controller.show_frame("WalletPage"), width=240).pack(pady=5)
+        ctk.CTkButton(self.btc_frame, text="Retrieve Contract", command=self.retrieve_contract, width=240).pack(pady=10)
+
+        ctk.CTkLabel(self.eth_frame, text="Solidity source (.sol)", font=(None, 16),
+                     text_color=CURRENCY_COLOR["eth"]).pack(anchor="w", padx=4, pady=(0, 6))
+        self.sol_source = ctk.CTkTextbox(self.eth_frame, width=760, height=360, font=("monospace", 13))
+        self.sol_source.pack(pady=6)
+        self.sol_source.insert("1.0", DEFAULT_SOLIDITY_CONTRACT)
+
+        self.eth_status = ctk.CTkLabel(self.eth_frame, text="Network: Sepolia public RPC", font=(None, 13),
+                                       text_color="gray")
+        self.eth_status.pack(pady=(4, 10))
+        self.deploy_button = ctk.CTkButton(
+            self.eth_frame,
+            text="Deploy Contract",
+            command=self.deploy_eth_contract,
+            width=240,
+            fg_color=CURRENCY_COLOR["eth"],
+            hover_color="#3d56b0",
+        )
+        self.deploy_button.pack(pady=5)
+
+        self.back_button = ctk.CTkButton(self.content, text="Back",
+                                         command=self.go_back, width=240)
+        self.back_button.pack(pady=10)
+
+        self.bind("<Visibility>", lambda e: self.refresh_mode())
+
+    def refresh_mode(self):
+        self.btc_frame.pack_forget()
+        self.eth_frame.pack_forget()
+
+        if self.controller.current_currency == "eth":
+            self.title_label.configure(text="Ξ  Deploy Smart Contract", text_color=CURRENCY_COLOR["eth"])
+            self.eth_frame.pack(pady=0)
+            self.back_button.configure(command=lambda: self.controller.show_frame("EthWalletPage"))
+        else:
+            self.title_label.configure(text="New Smart Contract", text_color=("gray10", "#DCE4EE"))
+            self.btc_frame.pack(pady=0)
+            self.back_button.configure(command=lambda: self.controller.show_frame("WalletPage"))
+
+    def go_back(self):
+        if self.controller.current_currency == "eth":
+            self.controller.show_frame("EthWalletPage")
+        else:
+            self.controller.show_frame("WalletPage")
+
+    def deploy_eth_contract(self):
+        sol_source = self.sol_source.get("1.0", "end").strip()
+        if not sol_source:
+            messagebox.showerror("Error", "Please provide Solidity source code")
+            return
+
+        wallet = self.controller.current_wallet_obj
+        if wallet is None or not hasattr(wallet, "deploy_contract"):
+            messagebox.showerror("Error", "ETH wallet is not loaded")
+            return
+
+        try:
+            fee_wei, gas_limit, contract_name, abi, bytecode = wallet.estimate_contract_deploy_fee(sol_source)
+        except Exception as e:
+            messagebox.showerror("Error", f"Unable to prepare contract deployment: {e}")
+            return
+
+        proceed = messagebox.askyesno(
+            "Confirm Contract Deployment",
+            f"Contract : {contract_name}\n"
+            f"Gas limit: {gas_limit}\n"
+            f"Fee      : {wei_to_eth(fee_wei):.6f} ETH  ({fmt_wei(fee_wei)})\n\n"
+            f"Do you want to deploy it to Sepolia?",
+        )
+        if not proceed:
+            return
+
+        self.deploy_button.configure(state="disabled")
+        self.eth_status.configure(text="Deploying contract, waiting for receipt...")
+
+        def _deploy():
+            try:
+                result = wallet.deploy_contract(
+                    sol_source=sol_source,
+                    contract_name=contract_name,
+                    abi=abi,
+                    bytecode=bytecode,
+                    gas_limit=gas_limit,
+                )
+            except Exception as e:
+                self.after(0, lambda err=e: self._finish_eth_deploy_error(err))
+                return
+            self.after(0, lambda res=result: self._finish_eth_deploy_success(res))
+
+        threading.Thread(target=_deploy, daemon=True).start()
+
+    def _finish_eth_deploy_success(self, result: dict):
+        self.deploy_button.configure(state="normal")
+        self.eth_status.configure(text=f"Deployed: {result['contract_address']}")
+        self.controller.contract_confirm_data = {
+            "currency": "eth",
+            "contract_name": result["contract_name"],
+            "contract_addr": result["contract_address"],
+            "tx_hash": result["tx_hash"],
+            "fee_wei": result["fee_wei"],
+            "gas_used": result["gas_used"],
+            "gas_limit": result["gas_limit"],
+            "explorer_address": f"https://sepolia.etherscan.io/address/{result['contract_address']}",
+            "explorer_tx": f"https://sepolia.etherscan.io/tx/{result['tx_hash']}",
+        }
+        self.controller.frames["ContractConfirmPage"].populate()
+        self.controller.show_frame("ContractConfirmPage")
+
+    def _finish_eth_deploy_error(self, error: Exception):
+        self.deploy_button.configure(state="normal")
+        self.eth_status.configure(text="Deployment failed")
+        messagebox.showerror("Error", f"Contract deployment failed: {error}")
 
     def create_contract(self):
         secret = self.secret_text.get().strip()
@@ -859,6 +989,7 @@ class SmartContractPage(ctk.CTkFrame):
             return
 
         self.controller.contract_confirm_data = {
+            "currency": "btc",
             "contract_addr": contract_addr,
             "redeem_hex": redeem_hex,
             "lock_minutes": lock_minutes,
@@ -1068,7 +1199,7 @@ class TxHistoryPage(ctk.CTkFrame):
 
 
 # ---------------------------------------------------------------------------
-# Contract Confirm page (unchanged)
+# Contract Confirm page
 # ---------------------------------------------------------------------------
 
 class ContractConfirmPage(ctk.CTkFrame):
@@ -1079,30 +1210,36 @@ class ContractConfirmPage(ctk.CTkFrame):
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(self.content, text="✅ Contract Created", font=(None, 34, "bold"),
-                     text_color="#2ecc71").pack(pady=(20, 10))
-        ctk.CTkLabel(self.content,
-                     text="Save the details below — you will need them to retrieve funds.",
-                     font=(None, 14), text_color="gray").pack(pady=(0, 20))
+        self.title_label = ctk.CTkLabel(self.content, text="Contract Created", font=(None, 34, "bold"),
+                                        text_color="#2ecc71")
+        self.title_label.pack(pady=(20, 10))
+        self.subtitle_label = ctk.CTkLabel(self.content, text="", font=(None, 14), text_color="gray")
+        self.subtitle_label.pack(pady=(0, 20))
 
-        addr_row = ctk.CTkFrame(self.content, fg_color="transparent")
-        addr_row.pack(fill="x", padx=20, pady=6)
-        ctk.CTkLabel(addr_row, text="Contract Address", font=(None, 13), text_color="gray",
+        self.addr_row = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.addr_row.pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(self.addr_row, text="Contract Address", font=(None, 13), text_color="gray",
                      width=160, anchor="w").pack(side="left")
-        self.addr_value = ctk.CTkLabel(addr_row, text="", font=(None, 14), anchor="w")
+        self.addr_value = ctk.CTkLabel(self.addr_row, text="", font=(None, 14), anchor="w",
+                                       wraplength=520, justify="left")
         self.addr_value.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(addr_row, text="📋", width=40, font=(None, 16),
+        ctk.CTkButton(self.addr_row, text="📋", width=40, font=(None, 16),
                       command=lambda: self._copy(self.addr_value.cget("text"))).pack(side="left", padx=(8, 0))
 
-        rs_row = ctk.CTkFrame(self.content, fg_color="transparent")
-        rs_row.pack(fill="x", padx=20, pady=6)
-        ctk.CTkLabel(rs_row, text="Redeem Script", font=(None, 13), text_color="gray",
+        self.rs_row = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.rs_row.pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(self.rs_row, text="Redeem Script", font=(None, 13), text_color="gray",
                      width=160, anchor="w").pack(side="left")
-        self.rs_value = ctk.CTkLabel(rs_row, text="", font=(None, 14), anchor="w",
+        self.rs_value = ctk.CTkLabel(self.rs_row, text="", font=(None, 14), anchor="w",
                                      wraplength=460, justify="left")
         self.rs_value.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(rs_row, text="📋", width=40, font=(None, 16),
+        ctk.CTkButton(self.rs_row, text="📋", width=40, font=(None, 16),
                       command=lambda: self._copy(self.rs_value.cget("text"))).pack(side="left", padx=(8, 0))
+
+        self.tx_row = self._detail_row("TX Hash")
+        self.fee_row = self._detail_row("Fee")
+        self.gas_row = self._detail_row("Gas")
+        self.explorer_row = self._detail_row("Explorer")
 
         self.recipient_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
         self.recipient_label.pack(pady=4)
@@ -1111,18 +1248,84 @@ class ContractConfirmPage(ctk.CTkFrame):
         self.locktime_label = ctk.CTkLabel(self.content, text="", font=(None, 14))
         self.locktime_label.pack(pady=4)
 
-        ctk.CTkButton(self.content, text="Back to Wallet",
-                      command=lambda: controller.show_frame("WalletPage"),
-                      width=240, font=(None, 20)).pack(pady=(30, 20))
+        self.copy_all_button = ctk.CTkButton(self.content, text="Copy All",
+                                             command=self.copy_all,
+                                             width=240, font=(None, 18))
+        self.copy_all_button.pack(pady=(24, 6))
+        self.back_button = ctk.CTkButton(self.content, text="Back to Wallet",
+                                         command=lambda: controller.show_frame("WalletPage"),
+                                         width=240, font=(None, 20))
+        self.back_button.pack(pady=(6, 20))
+
+    def _detail_row(self, label: str):
+        row = ctk.CTkFrame(self.content, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(row, text=label, font=(None, 13), text_color="gray",
+                     width=160, anchor="w").pack(side="left")
+        value = ctk.CTkLabel(row, text="", font=(None, 14), anchor="w",
+                             wraplength=520, justify="left")
+        value.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(row, text="📋", width=40, font=(None, 16),
+                      command=lambda: self._copy(value.cget("text"))).pack(side="left", padx=(8, 0))
+        return row, value
 
     def populate(self):
         data = self.controller.contract_confirm_data
+        currency = data.get("currency", "btc")
+
+        for row in (self.rs_row, self.tx_row[0], self.fee_row[0], self.gas_row[0], self.explorer_row[0]):
+            row.pack_forget()
+        for label in (self.recipient_label, self.amount_label, self.locktime_label):
+            label.pack_forget()
+
         self.addr_value.configure(text=data["contract_addr"])
+        self.addr_row.pack(fill="x", padx=20, pady=6, before=self.copy_all_button)
+
+        if currency == "eth":
+            self.title_label.configure(text="Ξ  Contract Deployed", text_color="#2ecc71")
+            self.subtitle_label.configure(text="Save or copy the deployment details below.")
+            self.tx_row[1].configure(text=data["tx_hash"])
+            self.fee_row[1].configure(text=f"{wei_to_eth(data['fee_wei']):.6f} ETH  ({fmt_wei(data['fee_wei'])})")
+            self.gas_row[1].configure(text=f"{data['gas_used']} used / {data['gas_limit']} limit")
+            self.explorer_row[1].configure(text=f"{data['explorer_address']}\n{data['explorer_tx']}")
+            for row in (self.tx_row[0], self.fee_row[0], self.gas_row[0], self.explorer_row[0]):
+                row.pack(fill="x", padx=20, pady=6, before=self.copy_all_button)
+            self.back_button.configure(command=lambda: self.controller.show_frame("EthWalletPage"))
+            return
+
+        self.title_label.configure(text="Contract Created", text_color="#2ecc71")
+        self.subtitle_label.configure(text="Save the details below — you will need them to retrieve funds.")
         self.rs_value.configure(text=data["redeem_hex"])
         self.recipient_label.configure(text=f"Recipient:    {data['recipient']}")
         self.amount_label.configure(text=f"Amount:       {data['amount']:,} satoshi")
-        self.locktime_label.configure(
-            text=f"Lock time:    {data['lock_minutes']} minutes  ({data['lock_blocks']} blocks)")
+        self.locktime_label.configure(text=f"Lock time:    {data['lock_minutes']} minutes  ({data['lock_blocks']} blocks)")
+        self.rs_row.pack(fill="x", padx=20, pady=6, before=self.copy_all_button)
+        self.recipient_label.pack(pady=4, before=self.copy_all_button)
+        self.amount_label.pack(pady=4, before=self.copy_all_button)
+        self.locktime_label.pack(pady=4, before=self.copy_all_button)
+        self.back_button.configure(command=lambda: self.controller.show_frame("WalletPage"))
+
+    def copy_all(self):
+        data = self.controller.contract_confirm_data
+        if data.get("currency") == "eth":
+            text = (
+                f"Contract: {data['contract_name']}\n"
+                f"Contract Address: {data['contract_addr']}\n"
+                f"TX Hash: {data['tx_hash']}\n"
+                f"Fee: {wei_to_eth(data['fee_wei']):.6f} ETH ({fmt_wei(data['fee_wei'])})\n"
+                f"Gas: {data['gas_used']} used / {data['gas_limit']} limit\n"
+                f"Explorer Address: {data['explorer_address']}\n"
+                f"Explorer TX: {data['explorer_tx']}"
+            )
+        else:
+            text = (
+                f"Contract Address: {data['contract_addr']}\n"
+                f"Redeem Script: {data['redeem_hex']}\n"
+                f"Recipient: {data['recipient']}\n"
+                f"Amount: {data['amount']} satoshi\n"
+                f"Lock time: {data['lock_minutes']} minutes ({data['lock_blocks']} blocks)"
+            )
+        self._copy(text)
 
     def _copy(self, text: str):
         self.clipboard_clear()
