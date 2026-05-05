@@ -1,9 +1,10 @@
 import os
+import threading
 from tkinter import messagebox
 import customtkinter as ctk
 
 from main import Wallet
-from eth_wallet import EthWallet, wei_to_eth, eth_to_wei
+from eth_wallet import EthWallet, wei_to_eth, eth_to_wei, fmt_wei
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -540,7 +541,7 @@ class EthWalletPage(ctk.CTkFrame):
             self.label.configure(text=f"Ξ  {self.controller.current_wallet}")
             self.address_label.configure(text=f"Address: {address}")
             self.balance_label.configure(
-                text=f"Balance: {wallet.eth:.6f} ETH  ({wallet.wei:,} wei)"
+                text=f"Balance: {wallet.eth:.6f} ETH  ({fmt_wei(wallet.wei)})"
             )
             self.copy_button.configure(state="normal" if address else "disabled")
         except Exception as e:
@@ -595,7 +596,7 @@ class EthNewTxPage(ctk.CTkFrame):
             self.balance_label.configure(text="Balance: ?")
             return
         self.balance_label.configure(
-            text=f"Balance: {wallet.eth:.6f} ETH  ({wallet.wei:,} wei)"
+            text=f"Balance: {wallet.eth:.6f} ETH  ({fmt_wei(wallet.wei)})"
         )
 
     def send(self):
@@ -634,8 +635,8 @@ class EthNewTxPage(ctk.CTkFrame):
         fee_eth = wei_to_eth(fee_wei)
         proceed = messagebox.askyesno(
             "Confirm Transaction",
-            f"Amount : {amount_eth_float:.6f} ETH  ({amount_wei:,} wei)\n"
-            f"Fee    : {fee_eth:.6f} ETH  ({fee_wei:,} wei)\n\n"
+            f"Amount : {amount_eth_float:.6f} ETH  ({fmt_wei(amount_wei)})\n"
+            f"Fee    : {fee_eth:.6f} ETH  ({fmt_wei(fee_wei)})\n\n"
             f"Do you want to continue?",
         )
         if not proceed:
@@ -692,18 +693,24 @@ class EthTxHistoryPage(ctk.CTkFrame):
             self.status_label.configure(text="No ETH wallet loaded.")
             return
 
-        self.status_label.configure(text="Loading…")
-        self.update_idletasks()
-
         for w in self.scroll_frame.winfo_children():
             w.destroy()
+        self.status_label.configure(
+            text="⏳ Scanning recent blocks… (may take a moment)")
+        self.update_idletasks()
 
-        try:
-            txs = wallet.fetch_tx_history()
-        except Exception as e:
-            self.status_label.configure(text=f"Error fetching transactions: {e}")
-            return
+        def _fetch():
+            try:
+                txs = wallet.fetch_tx_history()
+            except Exception as e:
+                self.after(0, lambda err=e: self.status_label.configure(
+                    text=f"Error: {err}"))
+                return
+            self.after(0, lambda t=txs: self._render_txs(t))
 
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _render_txs(self, txs: list):
         if not txs:
             self.status_label.configure(text="No transactions found for this address.")
             return
@@ -726,19 +733,32 @@ class EthTxHistoryPage(ctk.CTkFrame):
                 type_label = "- OUTGOING"
                 type_color = "#e74c3c"
 
-            fee_str = f"{wei_to_eth(fee_wei):.6f} ETH" if fee_wei is not None else "—"
+            fee_str = (
+                f"{wei_to_eth(fee_wei):.6f} ETH  ({fmt_wei(fee_wei)})"
+                if fee_wei is not None else "—"
+            )
 
             card = ctk.CTkFrame(self.scroll_frame, corner_radius=8)
             card.pack(fill="x", pady=4, padx=4)
 
+            # ── row 1: type + ETH amount ──────────────────────────────────
             top = ctk.CTkFrame(card, fg_color="transparent")
-            top.pack(fill="x", padx=12, pady=(10, 4))
+            top.pack(fill="x", padx=12, pady=(10, 2))
 
             ctk.CTkLabel(top, text=type_label, font=(None, 16, "bold"),
                          text_color=type_color, width=140, anchor="w").pack(side="left")
             ctk.CTkLabel(top, text=f"{amount_eth:.6f} ETH", font=(None, 16, "bold"),
                          anchor="e").pack(side="right")
 
+            # ── row 2: wei in scientific notation ─────────────────────────
+            mid = ctk.CTkFrame(card, fg_color="transparent")
+            mid.pack(fill="x", padx=12, pady=(0, 2))
+
+            ctk.CTkLabel(mid, text="", width=140).pack(side="left")   # spacer
+            ctk.CTkLabel(mid, text=fmt_wei(amount_wei), font=(None, 11),
+                         text_color="gray", anchor="e").pack(side="right")
+
+            # ── row 3: txid + fee + status ────────────────────────────────
             bottom = ctk.CTkFrame(card, fg_color="transparent")
             bottom.pack(fill="x", padx=12, pady=(0, 10))
 

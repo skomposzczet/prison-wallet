@@ -27,7 +27,6 @@ from src.keys_handler import load_file, save_file
 # ── Network ──────────────────────────────────────────────────────────────────
 # Sepolia testnet — multiple public RPC endpoints tried in order so that if
 # one goes offline the wallet still works.
-ETHERSCAN_BASE = "https://api-sepolia.etherscan.io/api"
 
 RPC_URLS = [
     "https://ethereum-sepolia-rpc.publicnode.com",   # PublicNode  (no key)
@@ -65,6 +64,13 @@ def wei_to_eth(wei: int) -> float:
 
 def eth_to_wei(eth: float) -> int:
     return int(eth * WEI_PER_ETH)
+
+
+def fmt_wei(wei: int) -> str:
+    """Format a wei amount in scientific notation, e.g. 1.234e+15 wei."""
+    if wei == 0:
+        return "0 wei"
+    return f"{wei:.3e} wei"
 
 
 # ── Wallet ────────────────────────────────────────────────────────────────────
@@ -232,9 +238,11 @@ class EthWallet:
 
     # ── transaction history ───────────────────────────────────────────────────
 
-    def fetch_tx_history(self) -> list[dict]:
+    def fetch_tx_history(self, limit: int = 50) -> list[dict]:
         """
-        Fetch transaction history from Etherscan Sepolia API.
+        Fetch transaction history from the Blockscout REST API v2 (no API key needed).
+
+        Endpoint: GET https://eth-sepolia.blockscout.com/api/v2/addresses/{addr}/transactions
 
         Returns a list of dicts matching the BTC wallet's format:
             txid, type ("incoming"/"outgoing"), amount (wei), fee (wei|None), confirmed (bool)
@@ -242,52 +250,55 @@ class EthWallet:
         if not self.user_addr:
             return []
 
-        params = {
-            "module": "account",
-            "action": "txlist",
-            "address": self.user_addr,
-            "startblock": 0,
-            "endblock": 99999999,
-            "sort": "desc",
-        }
-
-        try:
-            resp = requests.get(ETHERSCAN_BASE, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            print(f"Failed to fetch tx history: {e}")
-            return []
-
-        if data.get("status") != "1":
-            # status "0" can mean "no transactions" or a real error
-            msg = data.get("message", "")
-            if "No transactions found" in msg:
-                return []
-            print(f"Etherscan error: {msg}")
-            return []
+        base = "https://eth-sepolia.blockscout.com/api/v2"
+        url  = f"{base}/addresses/{self.user_addr}/transactions"
+        params = {"filter": "to | from"}
 
         result = []
         addr_lower = self.user_addr.lower()
 
-        for tx in data.get("result", []):
-            txid = tx.get("hash", "?")
-            confirmed = int(tx.get("confirmations", 0)) > 0
-            value_wei = int(tx.get("value", 0))
-            gas_used = int(tx.get("gasUsed", 0))
-            gas_price = int(tx.get("gasPrice", 0))
-            fee_wei = gas_used * gas_price
+        while url and len(result) < limit:
+            try:
+                resp = requests.get(url, params=params, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                raise Exception(f"Blockscout API error: {e}") from e
 
-            is_outgoing = tx.get("from", "").lower() == addr_lower
-            tx_type = "outgoing" if is_outgoing else "incoming"
+            for tx in data.get("items", []):
+                txid      = tx.get("hash", "?")
+                status    = tx.get("status", "")          # "ok" | "error" | null (pending)
+                confirmed = status in ("ok", "error")     # any mined tx is confirmed
 
-            result.append({
-                "txid": txid,
-                "type": tx_type,
-                "amount": value_wei,
-                "fee": fee_wei if is_outgoing else None,
-                "confirmed": confirmed,
-            })
+                raw_value = tx.get("value", "0") or "0"
+                value_wei = int(raw_value)
 
-        print(f"Fetched {len(result)} ETH transactions for {self.user_addr}")
+                gas_used  = int(tx.get("gas_used")  or 0)
+                gas_price = int(tx.get("gas_price") or 0)
+                fee_wei   = gas_used * gas_price
+
+                tx_from = (tx.get("from", {}) or {}).get("hash", "").lower()
+                is_outgoing = tx_from == addr_lower
+                tx_type = "outgoing" if is_outgoing else "incoming"
+
+                result.append({
+                    "txid":      txid,
+                    "type":      tx_type,
+                    "amount":    value_wei,
+                    "fee":       fee_wei if is_outgoing else None,
+                    "confirmed": confirmed,
+                })
+
+                if len(result) >= limit:
+                    break
+
+            # Blockscout v2 paginates via next_page_params
+            next_params = data.get("next_page_params")
+            if next_params and len(result) < limit:
+                url    = f"{base}/addresses/{self.user_addr}/transactions"
+                params = next_params
+            else:
+                url = None
+
+        print(f"Fetched {len(result)} ETH transaction(s) for {self.user_addr}")
         return result
