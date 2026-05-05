@@ -3,6 +3,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from main import Wallet
+from eth_wallet import EthWallet, wei_to_eth, eth_to_wei
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -39,6 +40,7 @@ class App(ctk.CTk):
             SelectCurrencyPage,
             NewBtcWalletPage, NewEthWalletPage,
             WalletPage, EthWalletPage,
+            EthNewTxPage, EthTxHistoryPage,
             SmartContractPage, NewTxPage, TxHistoryPage, ContractConfirmPage,
         ):
             frame = F(self.container, self)
@@ -333,19 +335,67 @@ class NewEthWalletPage(ctk.CTkFrame):
         self.name = ctk.CTkEntry(self.content, placeholder_text="Wallet name", width=400)
         self.name.pack(pady=10)
 
-        self.privkey = ctk.CTkEntry(self.content, placeholder_text="Existing private key (optional)", width=400)
+        self.privkey = ctk.CTkEntry(
+            self.content,
+            placeholder_text="Existing private key hex (optional – leave blank to generate)",
+            width=400,
+        )
         self.privkey.pack(pady=10)
 
-        ctk.CTkButton(self.content, text="Import Wallet", command=self.stub, width=220).pack(pady=5)
-        ctk.CTkButton(self.content, text="Generate New Wallet", command=self.stub, width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Import Wallet", command=self.import_wallet, width=220).pack(pady=5)
+        ctk.CTkButton(self.content, text="Generate New Wallet", command=self.create_wallet, width=220).pack(pady=5)
         ctk.CTkButton(self.content, text="Back",
                       command=lambda: controller.show_frame("SelectCurrencyPage"), width=220).pack(pady=5)
 
-        ctk.CTkLabel(self.content, text="⚠️  Ethereum support coming soon",
-                     font=(None, 13), text_color="gray").pack(pady=(20, 0))
+    def _wallet_path(self, name: str) -> str:
+        return os.path.join(self.controller.wallets_dir("eth"), name)
 
-    def stub(self):
-        messagebox.showinfo("Not implemented", "Ethereum wallet creation is not yet implemented.")
+    def create_wallet(self):
+        name = self.name.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Please enter a wallet name")
+            return
+
+        path = self._wallet_path(name)
+        if os.path.exists(path):
+            messagebox.showerror("Error", "Wallet already exists")
+            return
+
+        try:
+            _, address = EthWallet.generate_new(
+                password=self.controller.current_password, output_dir=path
+            )
+            messagebox.showinfo("Success", f"ETH wallet created\nAddress: {address}")
+            self.controller.show_frame("ProfilePage")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create wallet: {e}")
+
+    def import_wallet(self):
+        name = self.name.get().strip()
+        key = self.privkey.get().strip()
+
+        if not name:
+            messagebox.showerror("Error", "Please enter a wallet name")
+            return
+        if not key:
+            messagebox.showerror("Error", "Please enter the private key to import")
+            return
+
+        path = self._wallet_path(name)
+        if os.path.exists(path):
+            messagebox.showerror("Error", "Wallet already exists")
+            return
+
+        try:
+            _, address = EthWallet.import_from_key(
+                password=self.controller.current_password,
+                private_key_hex=key,
+                output_dir=path,
+            )
+            messagebox.showinfo("Success", f"ETH wallet imported\nAddress: {address}")
+            self.controller.show_frame("ProfilePage")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to import wallet: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -431,27 +481,275 @@ class EthWalletPage(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
+        self.loaded_address = ""
 
         self.content = ctk.CTkFrame(self)
         self.content.place(relx=0.5, rely=0.5, anchor="center")
 
-        self.label = ctk.CTkLabel(self.content, text="Ξ  ETH Wallet", font=(None, 50),
+        self.label = ctk.CTkLabel(self.content, text="Ξ  ETH Wallet", font=(None, 60),
                                   text_color=CURRENCY_COLOR["eth"])
-        self.label.pack(pady=20)
+        self.label.pack(pady=10)
 
-        self.name_label = ctk.CTkLabel(self.content, text="", font=(None, 22))
-        self.name_label.pack(pady=5)
+        # Address row with copy button
+        self.address_frame = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.address_frame.pack(fill="x", pady=10, padx=20)
 
-        ctk.CTkLabel(self.content, text="⚠️  Ethereum wallet functionality coming soon.",
-                     font=(None, 16), text_color="gray").pack(pady=30)
+        self.address_label = ctk.CTkLabel(self.address_frame, text="Address: ?",
+                                          anchor="w", justify="left", font=(None, 20))
+        self.address_label.pack(side="left", fill="x", expand=True)
 
+        self.copy_button = ctk.CTkButton(self.address_frame, text="📋",
+                                         command=self.copy_address,
+                                         width=40, state="disabled", font=(None, 24))
+        self.copy_button.pack(side="left", padx=10)
+
+        self.balance_label = ctk.CTkLabel(self.content, text="Balance: ?", font=(None, 36))
+        self.balance_label.pack(pady=10)
+
+        ctk.CTkButton(self.content, text="Send ETH",
+                      command=lambda: controller.show_frame("EthNewTxPage"),
+                      width=240, font=(None, 24),
+                      fg_color=CURRENCY_COLOR["eth"], hover_color="#3d56b0").pack(pady=5)
+        ctk.CTkButton(self.content, text="Transaction History",
+                      command=lambda: controller.show_frame("EthTxHistoryPage"),
+                      width=240, font=(None, 24)).pack(pady=5)
         ctk.CTkButton(self.content, text="Back",
-                      command=lambda: controller.show_frame("ProfilePage"), width=240, font=(None, 24)).pack(pady=5)
+                      command=lambda: controller.show_frame("ProfilePage"),
+                      width=240, font=(None, 24)).pack(pady=5)
 
-        self.bind("<Visibility>", lambda e: self.refresh())
+        self.bind("<Visibility>", lambda e: self.load_wallet())
 
-    def refresh(self):
-        self.name_label.configure(text=self.controller.current_wallet or "")
+    def load_wallet(self):
+        if not self.controller.current_wallet:
+            self.balance_label.configure(text="Balance: ?")
+            self.address_label.configure(text="Address: ?")
+            self.copy_button.configure(state="disabled")
+            return
+
+        wallet_dir = os.path.join(
+            self.controller.wallets_dir("eth"), self.controller.current_wallet
+        )
+        try:
+            wallet = EthWallet()
+            wallet.load_user_keys(
+                password=self.controller.current_password, wallet_dir=wallet_dir
+            )
+            self.controller.current_wallet_obj = wallet
+            address = wallet.user_addr or ""
+            self.loaded_address = address
+            self.label.configure(text=f"Ξ  {self.controller.current_wallet}")
+            self.address_label.configure(text=f"Address: {address}")
+            self.balance_label.configure(
+                text=f"Balance: {wallet.eth:.6f} ETH  ({wallet.wei:,} wei)"
+            )
+            self.copy_button.configure(state="normal" if address else "disabled")
+        except Exception as e:
+            messagebox.showerror("Error", f"Unable to load ETH wallet: {e}")
+            self.balance_label.configure(text="Balance: ?")
+            self.address_label.configure(text="Address: ?")
+            self.copy_button.configure(state="disabled")
+
+    def copy_address(self):
+        if not self.loaded_address:
+            messagebox.showerror("Error", "No wallet address available to copy")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(self.loaded_address)
+        messagebox.showinfo("Copied", "Wallet address copied to clipboard")
+
+
+# ---------------------------------------------------------------------------
+# ETH New Transaction page
+# ---------------------------------------------------------------------------
+
+class EthNewTxPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        self.content = ctk.CTkFrame(self)
+        self.content.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(self.content, text="Ξ  Send ETH", font=(None, 30),
+                     text_color=CURRENCY_COLOR["eth"]).pack(pady=20)
+
+        self.balance_label = ctk.CTkLabel(self.content, text="Balance: ?", font=(None, 16))
+        self.balance_label.pack(pady=(0, 10))
+
+        self.to = ctk.CTkEntry(self.content, placeholder_text="Recipient address (0x…)", width=440)
+        self.to.pack(pady=10)
+
+        self.amount_eth = ctk.CTkEntry(self.content, placeholder_text="Amount in ETH (e.g. 0.001)", width=440)
+        self.amount_eth.pack(pady=10)
+
+        ctk.CTkButton(self.content, text="Send", command=self.send,
+                      width=200, fg_color=CURRENCY_COLOR["eth"], hover_color="#3d56b0").pack(pady=10)
+        ctk.CTkButton(self.content, text="Back",
+                      command=lambda: controller.show_frame("EthWalletPage"), width=200).pack(pady=5)
+
+        self.bind("<Visibility>", lambda e: self.refresh_balance())
+
+    def refresh_balance(self):
+        wallet = self.controller.current_wallet_obj
+        if wallet is None or not hasattr(wallet, "eth"):
+            self.balance_label.configure(text="Balance: ?")
+            return
+        self.balance_label.configure(
+            text=f"Balance: {wallet.eth:.6f} ETH  ({wallet.wei:,} wei)"
+        )
+
+    def send(self):
+        target_addr = self.to.get().strip()
+        amount_text = self.amount_eth.get().strip()
+
+        if not target_addr or not amount_text:
+            messagebox.showerror("Error", "Please enter a destination address and amount")
+            return
+
+        if not target_addr.startswith("0x") or len(target_addr) != 42:
+            messagebox.showerror("Error", "Invalid Ethereum address (must start with 0x, 42 chars)")
+            return
+
+        try:
+            amount_eth_float = float(amount_text)
+            if amount_eth_float <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Error", "Amount must be a positive number (e.g. 0.001)")
+            return
+
+        amount_wei = eth_to_wei(amount_eth_float)
+
+        wallet = self.controller.current_wallet_obj
+        if wallet is None or not hasattr(wallet, "wei"):
+            messagebox.showerror("Error", "ETH wallet is not loaded")
+            return
+
+        try:
+            fee_wei = wallet.estimate_fee()
+        except Exception as e:
+            messagebox.showerror("Error", f"Unable to estimate fee: {e}")
+            return
+
+        fee_eth = wei_to_eth(fee_wei)
+        proceed = messagebox.askyesno(
+            "Confirm Transaction",
+            f"Amount : {amount_eth_float:.6f} ETH  ({amount_wei:,} wei)\n"
+            f"Fee    : {fee_eth:.6f} ETH  ({fee_wei:,} wei)\n\n"
+            f"Do you want to continue?",
+        )
+        if not proceed:
+            return
+
+        try:
+            tx_hash, fee = wallet.transfer_to(
+                target_addr=target_addr, transfer_amount_wei=amount_wei
+            )
+            if tx_hash:
+                messagebox.showinfo(
+                    "Success",
+                    f"Transaction broadcasted!\n"
+                    f"TX Hash: {tx_hash}\n"
+                    f"Fee: {wei_to_eth(fee):.6f} ETH\n\n"
+                    f"View: https://sepolia.etherscan.io/tx/{tx_hash}",
+                )
+                self.controller.show_frame("EthWalletPage")
+            else:
+                messagebox.showerror("Error", "Broadcast failed. Check console for details.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Transaction failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# ETH Transaction History page
+# ---------------------------------------------------------------------------
+
+class EthTxHistoryPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        header = ctk.CTkFrame(self)
+        header.pack(fill="x", padx=20, pady=(20, 0))
+
+        ctk.CTkLabel(header, text="Ξ  ETH Transaction History", font=(None, 28),
+                     text_color=CURRENCY_COLOR["eth"]).pack(side="left", padx=10)
+        ctk.CTkButton(header, text="Refresh", command=self.load_history, width=120).pack(side="right", padx=10)
+        ctk.CTkButton(header, text="Back",
+                      command=lambda: controller.show_frame("EthWalletPage"), width=100).pack(side="right", padx=5)
+
+        self.status_label = ctk.CTkLabel(self, text="", font=(None, 14))
+        self.status_label.pack(pady=(5, 0))
+
+        self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="")
+        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self.bind("<Visibility>", lambda e: self.load_history())
+
+    def load_history(self):
+        wallet = self.controller.current_wallet_obj
+        if wallet is None or not hasattr(wallet, "wei") or not wallet.user_addr:
+            self.status_label.configure(text="No ETH wallet loaded.")
+            return
+
+        self.status_label.configure(text="Loading…")
+        self.update_idletasks()
+
+        for w in self.scroll_frame.winfo_children():
+            w.destroy()
+
+        try:
+            txs = wallet.fetch_tx_history()
+        except Exception as e:
+            self.status_label.configure(text=f"Error fetching transactions: {e}")
+            return
+
+        if not txs:
+            self.status_label.configure(text="No transactions found for this address.")
+            return
+
+        self.status_label.configure(text=f"{len(txs)} transaction(s) found")
+
+        for tx in txs:
+            txid = tx["txid"]
+            confirmed = tx["confirmed"]
+            tx_type = tx["type"]
+            amount_wei = tx["amount"]
+            fee_wei = tx["fee"]
+
+            amount_eth = wei_to_eth(amount_wei)
+
+            if tx_type == "incoming":
+                type_label = "+ INCOMING"
+                type_color = "#2ecc71"
+            else:
+                type_label = "- OUTGOING"
+                type_color = "#e74c3c"
+
+            fee_str = f"{wei_to_eth(fee_wei):.6f} ETH" if fee_wei is not None else "—"
+
+            card = ctk.CTkFrame(self.scroll_frame, corner_radius=8)
+            card.pack(fill="x", pady=4, padx=4)
+
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=12, pady=(10, 4))
+
+            ctk.CTkLabel(top, text=type_label, font=(None, 16, "bold"),
+                         text_color=type_color, width=140, anchor="w").pack(side="left")
+            ctk.CTkLabel(top, text=f"{amount_eth:.6f} ETH", font=(None, 16, "bold"),
+                         anchor="e").pack(side="right")
+
+            bottom = ctk.CTkFrame(card, fg_color="transparent")
+            bottom.pack(fill="x", padx=12, pady=(0, 10))
+
+            short_txid = f"{txid[:16]}…{txid[-8:]}" if len(txid) > 26 else txid
+            ctk.CTkLabel(bottom, text=f"TX: {short_txid}", font=(None, 11),
+                         text_color="gray", anchor="w").pack(side="left")
+
+            status_text = "Confirmed" if confirmed else "Pending"
+            status_color = "#2ecc71" if confirmed else "#f39c12"
+            ctk.CTkLabel(bottom, text=f"Fee: {fee_str}   |   {status_text}",
+                         font=(None, 11), text_color=status_color, anchor="e").pack(side="right")
 
 
 # ---------------------------------------------------------------------------
